@@ -1,0 +1,17 @@
+User-agent: *
+# Canonical landing experience now lives at /round-generator
+# Practice mode available at /practice (early / evolving)
+# (Root / still served but instantly redirects client-side.)
+
+# Block internal API endpoints (served via Firebase rewrites)
+Disallow: /api/
+
+# Prevent indexing of auth page
+Disallow: /signin
+
+# (Optional) specify crawl delay for non-Google bots (Google ignores this)
+# Crawl-delay: 5
+
+Sitemap: https://sciencebowl.org/sitemap.xml
+
+# Last updated: 2025-09-20

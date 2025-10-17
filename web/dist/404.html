@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>You Buzzed In Wrong</title>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme: light dark; --tint:#6366f1; }
+    * { box-sizing: border-box; }
+    body { font-family: Inter, system-ui, sans-serif; margin:0; min-height:100vh; display:flex; flex-direction:column; background: radial-gradient(circle at 30% 20%, #eef2ff, #ffffff 60%); }
+    @media (prefers-color-scheme: dark){ body { background: radial-gradient(circle at 30% 20%, #0f172a, #020617 70%); color:#e2e8f0; }}
+    main { flex:1; display:flex; align-items:center; justify-content:center; padding:2rem; }
+    .card { max-width:680px; width:100%; background:rgba(255,255,255,0.85); backdrop-filter: blur(10px); padding:2.25rem 2.5rem 2.5rem; border-radius:1.5rem; box-shadow:0 4px 24px -4px rgba(0,0,0,0.15); position:relative; overflow:hidden; }
+    @media (prefers-color-scheme: dark){ .card { background:rgba(15,23,42,0.75); box-shadow:0 4px 28px -4px rgba(0,0,0,0.6); }}
+    h1 { margin:0 0 1.1rem; font-size:clamp(2.6rem,6vw,3.8rem); line-height:1.2; letter-spacing:-0.02em; background:linear-gradient(90deg,#3b82f6,#10b981); -webkit-background-clip:text; background-clip:text; color:transparent; padding-bottom:.25rem; }
+    p { font-size:1.05rem; line-height:1.5; margin:0 0 1.25rem; }
+    code { background:#0000000d; padding:0.15rem 0.45rem; border-radius:0.4rem; font-size:0.9rem; }
+    @media (prefers-color-scheme: dark){ code { background:#ffffff10; }}
+    a.btn { --btn-bg:var(--tint); display:inline-flex; gap:.5rem; align-items:center; text-decoration:none; font-weight:600; color:#fff; background:linear-gradient(135deg,var(--tint),#8b5cf6); padding:.85rem 1.25rem; border-radius:.9rem; box-shadow:0 4px 18px -4px rgba(99,102,241,0.55); position:relative; }
+    a.btn:hover { box-shadow:0 6px 26px -6px rgba(99,102,241,0.75); transform:translateY(-2px); transition:all .25s; }
+    .chip { display:inline-block; font-size:.65rem; text-transform:uppercase; letter-spacing:.08em; font-weight:600; padding:.35rem .55rem; background:#0000000d; border-radius:.45rem; margin-right:.4rem; color:#dc2626; }
+    @media (prefers-color-scheme: dark){ .chip { background:#ffffff10; }}
+    .bg-num { position:absolute; inset:0; font-size:22rem; font-weight:700; opacity:.04; display:flex; align-items:center; justify-content:center; pointer-events:none; user-select:none; color:#000; }
+    @media (prefers-color-scheme: dark){ .bg-num { color:#fff; opacity:.03; }}
+    footer { text-align:center; padding:1.5rem 1rem 2rem; font-size:.8rem; opacity:.65; }
+    ul { padding-left:1.2rem; margin:0 0 1.2rem; }
+    li { margin:.3rem 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card" role="alert" aria-live="polite">
+      <div class="bg-num">404</div>
+      <div class="chip" aria-hidden="true">Incorrect Interrupt</div>
+      <h1>You just negged.</h1>
+      <p>In Science Bowl and web browsing, timing matters, but accuracy still wins the round <code>(yes, Lucas)</code>.</p>
+      <p>You buzzed in early with what you were <em>sure</em> was a valid URL. Unfortunately, after phoning it in, Adam Matthews has ruled your answer: <strong>NOT FOUND</strong>.</p>
+      <p>The page you wanted either moved, never existed, or got beaten to the toss-up by someone else.</p>
+      <a class="btn" href="/" aria-label="Return to homepage">Return before the moderator finishes the question</a>
+    </div>
+  </main>
+  <footer>Davidson Science Bowl</footer>
+</body>
+</html>
+</html>

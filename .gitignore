@@ -1,0 +1,13 @@
+.venv/
+.firebase/
+*.jsonl
+.DS_Store
+/web/node_modules
+/node_modules
+*.pyc
+/backups
+/functions/node_modules
+# Never commit Firebase service account credentials
+*firebase-adminsdk-*.json
+*service-account*.json
+/__pycache__

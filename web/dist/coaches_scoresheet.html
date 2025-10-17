@@ -1,0 +1,127 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+  <title>SBCoachesScoreSheet</title>
+  <meta name="author" content="SciBowl"/>
+  <style type="text/css">
+    * { margin:0; padding:0; text-indent:0; box-sizing: border-box; }
+    body { font-family:"Times New Roman", serif; font-size:11pt; padding:18pt 24pt; }
+    h1 { font-size:13pt; text-align:center; margin-bottom:8pt; font-weight:bold; }
+    p { font-size:11pt; }
+    .legend-block { margin-bottom:8pt; }
+    table { border-collapse:collapse; font-size:10.5pt; }
+    td, th { border:1px solid #000; padding:2pt 3pt; vertical-align:middle; text-align:center; min-width:18pt; }
+    th { font-weight:bold; font-size:11pt; }
+    .flex-row { display:flex; gap:24pt; align-items:flex-start; justify-content:space-between; }
+    .team-wrapper { flex:1 1 0; }
+    .team-title { text-align:center; font-size:12pt; font-weight:bold; margin:6pt 0 4pt; }
+    .notes-box { border:0.5pt solid #000; padding:4pt 6pt; margin:10pt 0 14pt; }
+    .notes-box p { font-size:10.5pt; }
+    .small { font-size:10pt; }
+    .row-num { background:#f5f5f5; font-weight:normal; }
+    .score-col { min-width:28pt; }
+    .wide-col { min-width:30pt; }
+    .subject-col, .type-col { min-width:26pt; }
+    .bonus-col, .penalty-col { min-width:30pt; }
+    .attempt-cell { font-weight:bold; font-size:10pt; }
+    .footer { margin-top:10pt; font-size:9pt; text-align:center; }
+    .two-col-header { display:flex; justify-content:space-between; font-weight:bold; margin:12pt 0 4pt; font-size:12pt; }
+    .hidden-print { display:none; }
+    @media print { body { padding:0; } }
+  </style>
+</head>
+<body>
+  <p style="text-align:center;font-weight:bold;">NATIONAL SCIENCE BOWL FOR HIGH SCHOOL STUDENTS – COACHES SCORESHEET</p>
+  <div class="legend-block">
+    <table style="margin-top:8pt; width:100%;">
+      <tr>
+        <td rowspan="2" style="width:60pt;font-style:italic;font-weight:bold;">Subjects</td>
+        <td style="text-align:left;">E <span class="small">= Earth Science</span></td>
+        <td style="text-align:left;">G <span class="small">= General Science</span></td>
+        <td style="text-align:left;">L <span class="small">= Life Science</span></td>
+      </tr>
+      <tr>
+        <td style="text-align:left;">M <span class="small">= Math</span></td>
+        <td style="text-align:left;">P <span class="small">= Physical Science</span></td>
+        <td></td>
+      </tr>
+    </table>
+    <table style="margin-top:6pt; width:60%;">
+      <tr>
+        <td style="width:60pt;font-style:italic;font-weight:bold;">Types</td>
+        <td style="text-align:left;">MC <span class="small">= Multiple Choice</span></td>
+        <td style="text-align:left;">SA <span class="small">= Short Answer</span></td>
+      </tr>
+    </table>
+    <table style="margin-top:6pt; width:60%;">
+      <tr>
+        <td rowspan="3" style="width:60pt;font-style:italic;font-weight:bold;">Points</td>
+        <td style="text-align:left;">4 <span class="small">= Toss Up Correct Answer</span></td>
+      </tr>
+      <tr>
+        <td style="text-align:left;">10 <span class="small">= Bonus Correct Answer</span></td>
+      </tr>
+      <tr>
+        <td style="text-align:left;">4 <span class="small">= Penalty Points (awarded to opposing team)</span></td>
+      </tr>
+    </table>
+  </div>
+  <div class="notes-box">
+    <p><i><b>Note to Coaches:</b></i> This scoresheet was developed to assist coaches in tracking subject matter, type of questions, and scoring. No other use is allowed.</p>
+    <p style="font-weight:bold;margin-top:4pt;">“You are still not allowed to write down questions.”</p>
+  </div>
+  <div class="two-col-header"><span>Team A</span><span>Team B</span></div>
+  <div class="flex-row">
+    <!-- Team A Table -->
+    <div class="team-wrapper">
+      <table data-team="A" style="width:100%;">
+        <thead>
+          <tr>
+            <th class="row-num">Q</th>
+            <th class="subject-col">Subject</th>
+            <th class="type-col">Type</th>
+            <th class="wide-col">Captain</th>
+            <th class="wide-col">Player 1</th>
+            <th class="wide-col">Player 2</th>
+            <th class="wide-col">Player 3</th>
+            <th class="bonus-col">Bonus Pts</th>
+            <th class="penalty-col">Penalty Pts</th>
+            <th class="score-col">Score</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- 25 rows -->
+          <!-- Generated static rows with data-row attr; cells get class names for population -->
+          <!-- Row template repeated -->
+          <!-- We intentionally do not self-close to make parsing robust -->
+          %ROWS_A%
+        </tbody>
+      </table>
+    </div>
+    <!-- Team B Table -->
+    <div class="team-wrapper">
+      <table data-team="B" style="width:100%;">
+        <thead>
+          <tr>
+            <th class="row-num">Q</th>
+            <th class="subject-col">Subject</th>
+            <th class="type-col">Type</th>
+            <th class="wide-col">Captain</th>
+            <th class="wide-col">Player 1</th>
+            <th class="wide-col">Player 2</th>
+            <th class="wide-col">Player 3</th>
+            <th class="bonus-col">Bonus Pts</th>
+            <th class="penalty-col">Penalty Pts</th>
+            <th class="score-col">Score</th>
+          </tr>
+        </thead>
+        <tbody>
+          %ROWS_B%
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="footer">Generated by scibowl.app</div>
+</body>
+</html>

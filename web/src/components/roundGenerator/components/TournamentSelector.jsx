@@ -1,5 +1,6 @@
 import React from 'react';
 import { ChevronUp, ChevronDown, Maximize2, List } from 'lucide-react';
+import isMsTournament from '../utils/isMsTournament.js';
 
 export default function TournamentSelector({
   tournaments,
@@ -18,13 +19,13 @@ export default function TournamentSelector({
     <div>
       <div className="font-semibold mb-2 flex items-center flex-wrap gap-2">Tournaments
         <button className="chip px-2 py-0.5 text-xs" title="Clear selection" onClick={() => setSelectedTournaments([])}>Clear</button>
-        <button className="chip px-2 py-0.5 text-xs" title="Select all" onClick={() => setSelectedTournaments(tournaments.filter(t => {
-          // Exclude tournaments that belong to the 'ms' category.
-          // `tournaments` is an array of keys; tournamentGroups contains groups with .all entries.
-          // We'll select only tournaments whose group.base !== 'ms'.
-          const grp = tournamentGroups.find(g => g.all.includes(t));
-          return !(grp && grp.base === 'ms');
-        }))}>Select All</button>
+        <button
+          className="chip px-2 py-0.5 text-xs"
+          title="Select all"
+          onClick={() => setSelectedTournaments((tournaments || []).filter(t => !isMsTournament(t)))}
+        >
+          Select All
+        </button>
         <button
           className="chip px-2 py-0.5 text-xs inline-flex items-center gap-1"
           aria-label="Expand tournament list"
@@ -173,10 +174,13 @@ export default function TournamentSelector({
             </div>
             <div className="flex items-center flex-wrap gap-2">
               <button className="chip px-2 py-0.5 text-xs" title="Clear selection" onClick={() => setSelectedTournaments([])}>Clear</button>
-              <button className="chip px-2 py-0.5 text-xs" title="Select all" onClick={() => setSelectedTournaments(tournaments.filter(t => {
-                const grp = tournamentGroups.find(g => g.all.includes(t));
-                return !(grp && grp.base === 'ms');
-              }))}>Select All</button>
+              <button
+                className="chip px-2 py-0.5 text-xs"
+                title="Select all"
+                onClick={() => setSelectedTournaments((tournaments || []).filter(t => !isMsTournament(t)))}
+              >
+                Select All
+              </button>
               <button
                 className="chip px-2 py-0.5 text-xs inline-flex items-center gap-1"
                 aria-label="Expand all groups"

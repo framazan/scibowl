@@ -3,6 +3,7 @@ import React, { useMemo, useState } from 'react';
 import PracticeMode from './components/PracticeMode.jsx';
 import RoundGenerator from './components/RoundGenerator.jsx';
 import useRoundsQuestionsLazy from './data/useRoundsQuestionsLazy.js';
+import isMsTournament from './components/roundGenerator/utils/isMsTournament.js';
 import { Moon, Sun } from 'lucide-react';
 import { useEffect } from 'react';
 import useAuth from './data/useAuth.js';
@@ -151,12 +152,14 @@ function PracticeScaffold({ lazy }) {
           </button>
           <button
             className="chip px-2 py-0.5 text-xs ml-2"
-            onClick={() => setSelected([...lazy.tournaments])}
+            onClick={() => setSelected((lazy.tournaments || []).filter(t => !isMsTournament(t)))}
             type="button"
           >
             Select All
           </button>
         </div>
+        <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400" style={{textAlign: 'right'}}>* Select All does not include MS rounds.</div>
+        
         <div className="flex flex-wrap gap-2">
           {lazy.tournaments.map(t => (
             <label key={t} className={`chip cursor-pointer ${selected.includes(t) ? 'ring-1 ring-tint bg-tint/10' : ''}`}>

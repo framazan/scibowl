@@ -141,6 +141,22 @@ function PracticeScaffold({ lazy }) {
     <div className="space-y-4">
   <div className="glass-liquid p-4">
         <div className="font-semibold mb-2">Choose tournaments for Practice</div>
+        <div className="font-semibold mb-2" style={{ textAlign: 'right' }}>
+          <button
+            className="chip px-2 py-0.5 text-xs"
+            onClick={() => setSelected([])}
+            type="button"
+          >
+            Clear
+          </button>
+          <button
+            className="chip px-2 py-0.5 text-xs ml-2"
+            onClick={() => setSelected([...lazy.tournaments])}
+            type="button"
+          >
+            Select All
+          </button>
+        </div>
         <div className="flex flex-wrap gap-2">
           {lazy.tournaments.map(t => (
             <label key={t} className={`chip cursor-pointer ${selected.includes(t) ? 'ring-1 ring-tint bg-tint/10' : ''}`}>

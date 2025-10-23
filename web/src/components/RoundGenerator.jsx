@@ -699,7 +699,7 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
       count,
       questionType,
     });
-    // Generate normally using current filters
+    // Generate from the selected filters
     const pairs = computePairs();
     setGenerated(pairs);
     if (pairs.length === 0) {

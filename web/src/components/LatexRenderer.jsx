@@ -1,6 +1,8 @@
 
-import React from 'react';
-import { BlockMath, InlineMath } from 'react-katex';
+import React, { Suspense } from 'react';
+const BlockMath = React.lazy(() => import('react-katex').then(m => ({ default: m.BlockMath })));
+const InlineMath = React.lazy(() => import('react-katex').then(m => ({ default: m.InlineMath })));
+// CSS import remains static so fonts/styles are available when component loads
 import 'katex/dist/katex.min.css';
 
 // Renders a string with $$...$$ as block math and $...$ as inline math
@@ -19,10 +21,18 @@ export default function LatexRenderer({ children }) {
     }
     const token = match[0];
     if (token.startsWith('$$')) {
-      parts.push(<BlockMath key={key++}>{token.slice(2, -2)}</BlockMath>);
+      parts.push(
+        <Suspense fallback={<span key={key++}>[math]</span>}>
+          <BlockMath key={key++}>{token.slice(2, -2)}</BlockMath>
+        </Suspense>
+      );
     } else if (token.startsWith('$')) {
-      // Add a small non-breaking space before and after inline math to prevent touching text
-      parts.push(<React.Fragment key={key++}>{'\u00A0'}<InlineMath>{token.slice(1, -1)}</InlineMath>{'\u00A0'}</React.Fragment>);
+      // Render inline math with minimal extra spacing
+      parts.push(
+        <Suspense fallback={<span key={key++}>[math]</span>}>
+          <InlineMath key={key++}>{token.slice(1, -1)}</InlineMath>
+        </Suspense>
+      );
     }
     lastIndex = regex.lastIndex;
   }

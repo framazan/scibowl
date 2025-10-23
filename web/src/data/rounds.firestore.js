@@ -583,5 +583,3 @@ export async function renameUserRound(uid, roundId, newTitle) {
 
   return true;
 }
-
-//

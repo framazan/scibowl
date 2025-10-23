@@ -1,6 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import LatexRenderer from './LatexRenderer.jsx';
-import { Check, Eye, EyeOff, SkipForward } from 'lucide-react';
+import { Check, Eye, EyeOff, SkipForward, AlertTriangle } from 'lucide-react';
+import { useFilters } from './roundGenerator/hooks/useFilters.js';
+import TournamentSelector from './roundGenerator/components/TournamentSelector.jsx';
+import { parseMCChoices as parseMCChoicesRG, findBonus as findBonusRG } from './roundGenerator/utils/helpers.js';
+import { isVisualBonus, getVisualBonusUrl } from '../data/visualBonuses.js';
 
 function pickRandom(arr, predicate = () => true) {
   const pool = arr.filter(predicate);
@@ -65,39 +69,157 @@ function parseMCChoices(q) {
   const byKey = new Map(entries);
   return order.map(k => [k, byKey.get(k)]).filter(([_, v]) => v != null);
 }
-export default function PracticeMode({ questions, tournamentName }) {
-  const [current, setCurrent] = useState(() => pickRandom(questions, q => q.question_type?.toLowerCase() === 'tossup'));
+function truthy(v) {
+  if (v === true) return true;
+  const s = String(v ?? '').trim().toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes' || s === 'y';
+}
+
+export default function PracticeMode({ questions = [], tournamentName = null, lazy = null }) {
+  // Merge tournaments and category selection like RoundGenerator via useFilters
+  const {
+    isLazy,
+    tournaments,
+    tournamentGroups,
+    selectedTournaments,
+    setSelectedTournaments,
+    selectedCategories,
+    setSelectedCategories,
+    tournamentGroupsOpen,
+    setTournamentGroupsOpen,
+    tournamentVisibleEntriesMainRef,
+    handleTournamentToggle,
+    loadedQuestions,
+    validQuestions,
+    categories,
+    inRanges, // not used here yet, but available
+  } = useFilters({ questions, lazy });
+
+  // Track dark mode to style components consistently with RoundGenerator
+  const [isDark, setIsDark] = useState(() => {
+    try { return document.documentElement.classList.contains('dark'); } catch { return false; }
+  });
+  useEffect(() => {
+    try {
+      const root = document.documentElement;
+      const update = () => setIsDark(root.classList.contains('dark'));
+      update();
+      const mo = new MutationObserver(update);
+      mo.observe(root, { attributes: true, attributeFilter: ['class'] });
+      const mql = window.matchMedia('(prefers-color-scheme: dark)');
+      mql.addEventListener('change', update);
+      return () => { mo.disconnect(); mql.removeEventListener('change', update); };
+    } catch { /* no-op */ }
+  }, []);
+
+  // Checkboxes for question types
+  const [includeTossups, setIncludeTossups] = useState(true);
+  const [includeBonuses, setIncludeBonuses] = useState(true);
+  const [includeVisualBonuses, setIncludeVisualBonuses] = useState(false);
+  // When visual bonuses are included, this switch restricts bonuses to only visual ones
+  const [onlyVisualBonuses, setOnlyVisualBonuses] = useState(false);
+
+  // If visual bonuses are turned off, reset the visual-only switch
+  useEffect(() => {
+    if (!includeVisualBonuses) setOnlyVisualBonuses(false);
+  }, [includeVisualBonuses]);
+
+  // Reading speed (words per second) for streaming read; default to 5 wps
+  const [readingSpeed, setReadingSpeed] = useState(5);
+
+  // Derive pool based on selections
+  const practicePool = useMemo(() => {
+    const catSet = new Set(selectedCategories);
+    return validQuestions.filter(q => {
+      if (selectedCategories.length && !catSet.has(q.category)) return false;
+      const type = q.question_type?.toLowerCase();
+      const visual = isVisualBonus(q);
+      if (type === 'tossup') return includeTossups;
+      if (type === 'bonus') {
+        if (!includeBonuses && !includeVisualBonuses) return false;
+        // If user explicitly toggles visual-only, restrict bonuses to visuals
+        if (includeVisualBonuses && onlyVisualBonuses) return visual;
+        if (!includeBonuses && includeVisualBonuses) return visual; // only visual
+        if (includeBonuses && !includeVisualBonuses) return !visual; // only non-visual
+        return true; // both selected
+      }
+      return false;
+    });
+  }, [validQuestions, selectedCategories, includeTossups, includeBonuses, includeVisualBonuses, onlyVisualBonuses]);
+
+  const [current, setCurrent] = useState(null);
   const [userAnswer, setUserAnswer] = useState('');
   const [result, setResult] = useState(null);
   const [showAnswer, setShowAnswer] = useState(false);
   const [bonusState, setBonusState] = useState(null); // {bonus, userAnswer, result, showAnswer}
 
+  // Determine preferred type for new questions based on current toggles and availability
+  const preferredType = useMemo(() => {
+    const hasTossups = practicePool.some(q => q.question_type?.toLowerCase() === 'tossup');
+    const hasBonuses = practicePool.some(q => q.question_type?.toLowerCase() === 'bonus');
+    if (includeTossups && hasTossups) return 'tossup';
+    if (hasBonuses) return 'bonus';
+    return null;
+  }, [practicePool, includeTossups]);
+
+  // Do not auto-select a question on load; wait for user to start.
+
   const mcChoices = useMemo(() => parseMCChoices(current), [current]);
 
   function nextQuestion() {
-    setCurrent(pickRandom(questions, q => q.question_type?.toLowerCase() === 'tossup'));
+    const pred = preferredType ? (q => q.question_type?.toLowerCase() === preferredType) : (() => true);
+    setCurrent(pickRandom(practicePool, pred));
     setUserAnswer('');
     setResult(null);
     setShowAnswer(false);
     setBonusState(null);
   }
 
+  function localCheckMultipleChoice(selectedKey, q) {
+    if (!q) return { correct: false };
+    const ans = String(q.answer ?? '').trim().toLowerCase();
+    // Accept various encodings like 'w', 'W', '(W)'. Also support text answer equals choice text.
+    const key = String(selectedKey ?? '').trim().toLowerCase();
+    const normalizedAnsKey = ans.replace(/[()\s.]/g, '').charAt(0);
+    const choices = parseMCChoicesRG(q);
+    const byKey = new Map(choices);
+    const selectedText = byKey.get(key);
+    // If answer looks like a key (w/x/y/z/a/b/c/d), compare keys
+    const keyMap = { a: 'w', b: 'x', c: 'y', d: 'z' };
+    const ansKey = keyMap[normalizedAnsKey] || normalizedAnsKey;
+    if (['w','x','y','z'].includes(ansKey)) {
+      const ok = ansKey === key;
+      return { correct: ok, reason: ok ? undefined : `Correct: ${ansKey.toUpperCase()}` };
+    }
+    // Else compare selected text to answer text
+    const selNorm = String(selectedText ?? '').toLowerCase().replace(/\s+/g,' ').trim();
+    const ansNorm = ans.toLowerCase().replace(/\s+/g,' ').trim();
+    const ok = !!selNorm && (selNorm === ansNorm || ansNorm.includes(selNorm) || selNorm.includes(ansNorm));
+    return { correct: ok };
+  }
+
   async function check() {
     try {
-      const res = await fetch('/api/checkAnswer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userAnswer,
-          correctAnswer: current.answer,
-          question: current.question,
-        })
-      });
-      const data = await res.json();
+      let data;
+      if (mcChoices.length > 0) {
+        data = localCheckMultipleChoice(userAnswer, current);
+      } else {
+        const res = await fetch('/api/checkAnswer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userAnswer,
+            correctAnswer: current.answer,
+            question: current.question,
+          })
+        });
+        data = await res.json();
+      }
       setResult(data);
-      // If correct, show bonus if available
-      if (data.correct) {
-        const bonus = findBonus(current, questions);
+      // If correct on a toss-up, show bonus if available
+      const isTossup = current?.question_type?.toLowerCase() === 'tossup';
+      if (data.correct && isTossup) {
+        const bonus = findBonusRG(current, practicePool);
         if (bonus) {
           setBonusState({
             bonus,
@@ -116,24 +238,400 @@ export default function PracticeMode({ questions, tournamentName }) {
   async function checkBonus() {
     if (!bonusState) return;
     try {
-      const res = await fetch('/api/checkAnswer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userAnswer: bonusState.userAnswer,
-          correctAnswer: bonusState.bonus.answer,
-          question: bonusState.bonus.question,
-        })
-      });
-      const data = await res.json();
+      const bonusChoices = parseMCChoices(bonusState.bonus);
+      let data;
+      if (bonusChoices.length > 0) {
+        data = localCheckMultipleChoice(bonusState.userAnswer, bonusState.bonus);
+      } else {
+        const res = await fetch('/api/checkAnswer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userAnswer: bonusState.userAnswer,
+            correctAnswer: bonusState.bonus.answer,
+            question: bonusState.bonus.question,
+          })
+        });
+        data = await res.json();
+      }
       setBonusState(bs => ({ ...bs, result: data }));
     } catch (e) {
       setBonusState(bs => ({ ...bs, result: { correct: false, reason: 'Check failed' } }));
     }
   }
 
-  if (!current) return <div className="glass p-6">No questions available.</div>;
+  // UI scaffold similar to RoundGenerator's left panel
+  return (
+    <div className="grid gap-6 w-full md:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="md:self-start">
+        <div className="glass p-6 space-y-6">
+          {selectedTournaments.length === 0 && (
+            <div
+              role="alert"
+              aria-live="polite"
+              className="flex items-start gap-2 rounded-lg border-l-4 border-amber-500 bg-amber-50 text-amber-900 dark:border-amber-400 dark:bg-amber-900/20 dark:text-amber-100 px-3 py-2"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="text-sm">No tournaments selected.</div>
+            </div>
+          )}
+          <TournamentSelector
+            tournaments={tournaments}
+            tournamentGroups={tournamentGroups}
+            selectedTournaments={selectedTournaments}
+            setSelectedTournaments={setSelectedTournaments}
+            tournamentGroupsOpen={tournamentGroupsOpen}
+            setTournamentGroupsOpen={setTournamentGroupsOpen}
+            handleTournamentToggle={handleTournamentToggle}
+            tournamentVisibleEntriesMainRef={tournamentVisibleEntriesMainRef}
+            isDark={isDark}
+            showTournamentModal={false}
+            setShowTournamentModal={() => {}}
+          />
+          <div>
+            <div className="font-semibold mb-2">Categories</div>
+            <div className="flex flex-wrap gap-2">
+              {categories.map((c) => {
+                const active = selectedCategories.includes(c);
+                return (
+                  <label key={c} className={`chip cursor-pointer ${active ? 'ring-1 ring-tint bg-tint/10' : ''}`} title={c}>
+                    <input
+                      type="checkbox"
+                      className="mr-1"
+                      checked={active}
+                      onChange={() => setSelectedCategories(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])}
+                    />
+                    <span className="truncate max-w-[12rem] inline-block align-middle">{c}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          <div>
+            <div className="font-semibold mb-2">Question Types</div>
+            <div className="flex flex-wrap gap-2">
+              <label className="chip cursor-pointer">
+                <input type="checkbox" className="mr-1" checked={includeTossups} onChange={() => setIncludeTossups(v => !v)} /> Toss-ups
+              </label>
+              <label className={`chip cursor-pointer ${!includeTossups && !includeBonuses ? 'ring-1 ring-tint bg-tint/10' : ''}`}>
+                <input type="checkbox" className="mr-1" checked={includeBonuses} onChange={() => setIncludeBonuses(v => !v)} /> Bonuses
+              </label>
+              <label className={`chip items-center gap-2 cursor-pointer ${includeBonuses ? '' : 'opacity-50 pointer-events-none'}`}
+                title={includeBonuses ? 'Include image-based bonuses' : 'Enable Bonuses to toggle'}
+                style={{ alignItems: 'center', minWidth: 220, justifyContent: 'flex-start', flexWrap: 'nowrap', display: 'inline-flex' }}>
+                <input
+                  type="checkbox"
+                  className="mr-1"
+                  checked={includeVisualBonuses}
+                  onChange={() => setIncludeVisualBonuses(v => !v)}
+                  disabled={!includeBonuses}
+                />
+                <span>Visual bonuses</span>
+                {/* Switch to restrict to only visual bonuses when visual is enabled */}
+                <span
+                  className={`${includeVisualBonuses ? '' : 'opacity-50'} ml-1 flex items-center gap-1`}
+                  onClick={e => e.stopPropagation()}
+                  title={includeVisualBonuses ? 'Only get visual bonuses' : 'Enable Visual bonuses first'}
+                  style={{ alignItems: 'center' }}
+                >
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={onlyVisualBonuses}
+                    aria-label="Only visual bonuses"
+                    disabled={!includeVisualBonuses}
+                    onClick={() => setOnlyVisualBonuses(v => !v)}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-tint/60 ${onlyVisualBonuses ? 'bg-tint' : 'bg-black/30 dark:bg-white/30'} ${includeVisualBonuses ? '' : 'cursor-not-allowed'}`}
+                    style={{ verticalAlign: 'middle' }}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${onlyVisualBonuses ? 'translate-x-4' : 'translate-x-1'}`}
+                    />
+                  </button>
+                  <span className="text-[10px] leading-none text-black/60 dark:text-white/60 select-none ml-1" style={{ fontWeight: 500 }}>
+                    only
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+          <div>
+            <div className="font-semibold mb-2">Reading speed</div>
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={1}
+                max={20}
+                step={1}
+                value={readingSpeed}
+                onChange={(e) => setReadingSpeed(Number(e.target.value))}
+                aria-label="Reading speed in words per second"
+                className="w-48"
+              />
+              <div className="text-sm tabular-nums">{readingSpeed} w/s</div>
+            </div>
+            <div className="text-xs text-black/60 dark:text-white/60 mt-1">Space to buzz. Enter to check. “n” next, “a” show answer.</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="min-w-0">
+        {!current ? (
+          <div className="glass p-6">
+            {practicePool.length ? (
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>Ready to begin.</div>
+                <button className="btn btn-primary" onClick={() => {
+                  const pred = preferredType ? (q => q.question_type?.toLowerCase() === preferredType) : (() => true);
+                  const next = pickRandom(practicePool, pred);
+                  if (next) {
+                    setCurrent(next);
+                    setUserAnswer('');
+                    setResult(null);
+                    setShowAnswer(false);
+                    setBonusState(null);
+                  }
+                }}>Start</button>
+              </div>
+            ) : 'No questions available. Select tournaments.'}
+          </div>
+        ) : (
+          <PracticeQuestionCard
+            current={current}
+            setCurrent={(q) => {
+              setCurrent(q);
+              setUserAnswer('');
+              setResult(null);
+              setShowAnswer(false);
+              setBonusState(null);
+            }}
+            pool={practicePool}
+            preferredType={preferredType}
+            userAnswer={userAnswer}
+            setUserAnswer={setUserAnswer}
+            result={result}
+            setResult={setResult}
+            showAnswer={showAnswer}
+            setShowAnswer={setShowAnswer}
+            bonusState={bonusState}
+            setBonusState={setBonusState}
+            check={check}
+            checkBonus={checkBonus}
+            readingSpeed={readingSpeed}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAnswer, setUserAnswer, result, setResult, showAnswer, setShowAnswer, bonusState, setBonusState, check, checkBonus, readingSpeed }) {
+  const mcChoices = useMemo(() => parseMCChoices(current), [current]);
+  const [currentVisualUrl, setCurrentVisualUrl] = React.useState(null);
+  const [showCurrentVisualFull, setShowCurrentVisualFull] = React.useState(false);
+  const [bonusVisualUrl, setBonusVisualUrl] = React.useState(null);
+  const [showBonusVisualFull, setShowBonusVisualFull] = React.useState(false);
+
+  // Streaming read state
+  const [buzzed, setBuzzed] = useState(false);
+  const [displayedWordCount, setDisplayedWordCount] = useState(0);
+  const [streamingActive, setStreamingActive] = useState(true);
+  const inputRef = useRef(null);
+
+  // Multiple-choice answer streaming (after the question finishes)
+  const [choiceStreamCount, setChoiceStreamCount] = useState(0); // how many choices text are revealed (0..4)
+  // After checking an answer, reveal remaining choices even if user buzzed early
+  const [revealChoicesAfterCheck, setRevealChoicesAfterCheck] = useState(false);
+
+  const plainQuestionText = useMemo(() => String(current?.question ?? ''), [current?.id]);
+  const words = useMemo(() => plainQuestionText.split(/\s+/).filter(Boolean), [plainQuestionText]);
+  const streamFinished = displayedWordCount >= words.length;
+  const isBonusCurrent = String(current?.question_type || '').toLowerCase() === 'bonus';
+  const canAnswer = isBonusCurrent || buzzed || streamFinished;
+
+  // Advance streaming based on readingSpeed (words/sec)
+  useEffect(() => {
+    if (!current) return;
+    if (!streamingActive) return;
+    if (buzzed) return;
+    if (words.length === 0) return;
+    const intervalMs = Math.max(50, Math.round(1000 / Math.max(1, readingSpeed)));
+    const id = setInterval(() => {
+      setDisplayedWordCount((c) => {
+        if (c >= words.length) return words.length;
+        return c + 1;
+      });
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [current?.id, streamingActive, buzzed, words.length, readingSpeed]);
+
+  // Reset streaming when question changes
+  useEffect(() => {
+    setBuzzed(false);
+    setDisplayedWordCount(0);
+    setStreamingActive(true);
+    setChoiceStreamCount(0);
+    setRevealChoicesAfterCheck(false);
+  }, [current?.id]);
+
+  // Start streaming MC choices after stem is fully read
+  useEffect(() => {
+    if (!current) return;
+    if (mcChoices.length === 0) return; // short answer question
+    if (!streamFinished) return; // only begin after stem finishes
+    if (buzzed) return; // do not stream choices after buzzing
+    if (choiceStreamCount >= 4) return;
+    // stream one choice at a time
+    const choiceIntervalMs = Math.max(250, 1000 - Math.min(20, readingSpeed) * 25);
+    const id = setInterval(() => {
+      setChoiceStreamCount((n) => Math.min(4, n + 1));
+    }, choiceIntervalMs);
+    return () => clearInterval(id);
+  }, [current?.id, streamFinished, mcChoices.length, choiceStreamCount, readingSpeed, buzzed]);
+
+  // After checking an answer (via Enter or button), reveal/stream remaining choices regardless of buzz
+  useEffect(() => {
+    if (!current) return;
+    if (mcChoices.length === 0) return;
+    if (!result) return; // only after a check has happened
+    if (choiceStreamCount >= 4) return;
+    // Start reveal if not already
+    if (!revealChoicesAfterCheck) setRevealChoicesAfterCheck(true);
+    // Faster stream for post-check reveal
+    const fastIntervalMs = 150;
+    const id = setInterval(() => {
+      setChoiceStreamCount((n) => {
+        if (n >= 4) return 4;
+        return n + 1;
+      });
+    }, fastIntervalMs);
+    return () => clearInterval(id);
+  }, [result, current?.id, mcChoices.length, choiceStreamCount, revealChoicesAfterCheck]);
+
+  // Global keyboard shortcuts within this card
+  useEffect(() => {
+    function isTypingInInput(el) {
+      return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    }
+    const onKeyDown = (e) => {
+      const key = e.key;
+      const target = e.target;
+      // Spacebar to buzz
+      if (key === ' ' || key === 'Spacebar') {
+        // If not typing in input, treat as buzz
+        if (!isTypingInInput(target)) {
+          e.preventDefault();
+          if (isBonusCurrent) {
+            // For bonuses, space only focuses input; do not alter streaming state
+            if (mcChoices.length === 0) {
+              setTimeout(() => inputRef.current?.focus(), 0);
+            }
+          } else {
+            if (!buzzed && streamingActive) {
+              setBuzzed(true);
+              setStreamingActive(false);
+              // Focus text input if short answer
+              if (mcChoices.length === 0) {
+                setTimeout(() => inputRef.current?.focus(), 0);
+              }
+            }
+          }
+        }
+      }
+      // Enter to check answer
+      if (key === 'Enter') {
+        // Allow Enter to submit even when typing
+        if (bonusState && !bonusState.result && bonusState.userAnswer) {
+          e.preventDefault();
+          checkBonus();
+          return;
+        }
+        const mcReady = mcChoices.length > 0 ? ((isBonusCurrent || buzzed) && !!userAnswer) : (canAnswer && String(userAnswer).trim().length > 0);
+        if (mcReady) {
+          e.preventDefault();
+          check();
+        }
+      }
+      // n for next question
+      if ((key === 'n' || key === 'N') && !isTypingInInput(target)) {
+        e.preventDefault();
+        nextQuestion();
+      }
+      // a to toggle show answer
+      if ((key === 'a' || key === 'A') && !isTypingInInput(target)) {
+        e.preventDefault();
+        setShowAnswer((s) => !s);
+      }
+
+      // w/x/y/z to select MC choices (only after buzz)
+      if (!isTypingInInput(target) && (isBonusCurrent || buzzed) && mcChoices.length > 0) {
+        const k = key.toLowerCase();
+        if (k === 'w' || k === 'x' || k === 'y' || k === 'z') {
+          e.preventDefault();
+          setUserAnswer(k);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [buzzed, streamingActive, mcChoices.length, canAnswer, userAnswer, bonusState]);
+
+  // Load visual image for current if it's a bonus and flagged as visual
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setCurrentVisualUrl(null);
+      const q = current;
+      if (!q || q.question_type?.toLowerCase() !== 'bonus') return;
+      if (!isVisualBonus(q)) return;
+      const url = await getVisualBonusUrl({ tournament: q.tournament, round: q.round, question_number: q.question_number }).catch(() => null);
+      if (!cancelled) setCurrentVisualUrl(url);
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [current?.id]);
+
+  // Load visual image for linked bonus (after a correct tossup)
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setBonusVisualUrl(null);
+      const b = bonusState?.bonus;
+      if (!b) return;
+      if (!isVisualBonus(b)) return;
+      const url = await getVisualBonusUrl({ tournament: b.tournament, round: b.round, question_number: b.question_number }).catch(() => null);
+      if (!cancelled) setBonusVisualUrl(url);
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [bonusState?.bonus?.id]);
+  function nextQuestion() {
+    const pred = preferredType ? (q => q.question_type?.toLowerCase() === preferredType) : (() => true);
+    const next = pickRandom(pool, pred);
+    setCurrent(next);
+  }
+
+  // Choose explanation text if available on the question object
+  function getExplanationText(q) {
+    if (!q || typeof q !== 'object') return null;
+    const keys = ['explanation', 'Explanation', 'rationale', 'Rationale', 'solution', 'Solution', 'notes', 'Notes', 'why'];
+    for (const k of keys) {
+      const v = q[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    return null;
+  }
+
+  const currentExplanation = useMemo(() => getExplanationText(current), [current?.id]);
+  const bonusExplanation = useMemo(() => getExplanationText(bonusState?.bonus), [bonusState?.bonus?.id]);
   const tournament_clean = String(current.tournament).toUpperCase();
+  const canSelectMc = isBonusCurrent ? true : buzzed; // Bonuses don't require buzz; toss-ups do
+  const fullMcChoices = useMemo(() => {
+    if (!Array.isArray(mcChoices) || mcChoices.length === 0) return [];
+    const map = new Map(mcChoices);
+    const order = ['w','x','y','z'];
+    return order.map(k => [k, map.get(k)]);
+  }, [mcChoices]);
   return (
     <div className="grid gap-6 md:grid-cols-2">
       <style>{`
@@ -141,8 +639,8 @@ export default function PracticeMode({ questions, tournamentName }) {
         .practice-katex .katex-display { margin: 0; }
         .practice-katex .katex-display > .katex { display: inline !important; }
 
-        /* Add a little space before inline math so it doesn't touch the previous word */
-        .practice-katex .katex { margin-left: 0.2em; margin-right: 0.05em; }
+        /* Minimize extra space around inline math */
+        .practice-katex .katex { margin-left: 0.05em; margin-right: 0.02em; }
         /* If math is the very first thing in a block, don't indent it */
         .practice-katex > .katex:first-child { margin-left: 0; }
       `}</style>
@@ -156,34 +654,70 @@ export default function PracticeMode({ questions, tournamentName }) {
               {' \u2022 '}Q{current.question_number}
             </>
           )}
+          <span className="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold tracking-wide border bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-200 dark:border-purple-700">
+            {isBonusCurrent ? 'BONUS' : 'TOSS-UP'}
+          </span>
           <span className="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold tracking-wide border bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-200 dark:border-blue-700">
             {mcChoices.length > 0 ? 'MULTIPLE CHOICE' : 'SHORT ANSWER'}
           </span>
         </div>
-        <div className="text-lg leading-relaxed whitespace-pre-line practice-katex">
-          <LatexRenderer>{current.question}</LatexRenderer>
-        </div>
+        {/* Visual image when current is a visual bonus */}
+        {current?.question_type?.toLowerCase() === 'bonus' && currentVisualUrl && (
+          <div className="mb-3">
+            <img
+              src={currentVisualUrl}
+              alt={`Visual bonus${current?.tournament ? ` • ${current.tournament}` : ''}${current?.round ? ` • Round ${current.round}` : ''}${current?.question_number != null ? ` • Q${current.question_number}` : ''}`}
+              className="max-h-64 rounded-md border border-black/10 dark:border-white/10 object-contain cursor-zoom-in hover:opacity-95 transition"
+              onClick={() => setShowCurrentVisualFull(true)}
+            />
+            <div className="text-xs text-black/60 dark:text-white/60 mt-1">Click image to view full screen</div>
+          </div>
+        )}
+        {/* Streaming read: show partial plain text until the stem finishes; once finished, render full LaTeX even before any buzz. */}
+        {!streamFinished ? (
+          <div className="text-lg leading-relaxed whitespace-pre-line practice-katex">
+            <LatexRenderer>{words.slice(0, Math.min(displayedWordCount, words.length)).join(' ')}</LatexRenderer>
+            {!buzzed && (
+              <div className="mt-2 text-sm text-black/60 dark:text-white/60">Press space to buzz</div>
+            )}
+          </div>
+        ) : (
+          <div className="text-lg leading-relaxed whitespace-pre-line practice-katex">
+            <LatexRenderer>{current.question}</LatexRenderer>
+          </div>
+        )}
       </div>
       <div className="glass p-6 flex flex-col justify-between" style={{ minHeight: '40vh', width: '100%' }}>
         <label className="block text-sm font-medium mb-2">Your answer</label>
         {/* Show radio buttons for MC, textbox for short answer only */}
         {Array.isArray(mcChoices) && mcChoices.length > 0 ? (
           <div className="space-y-2 text-lg mb-4">
-            {mcChoices.map(([k, v]) => (
-              <label key={k} className="flex items-baseline gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name={`tossup-mc-${current.id}`}
-                  value={k}
-                  checked={String(userAnswer) === String(k)}
-                  onChange={() => setUserAnswer(k)}
-                  className="accent-tint w-5 h-5"
-                />
-                <span className="practice-katex">
-                  {k.toUpperCase()}) <LatexRenderer>{v}</LatexRenderer>
-                </span>
-              </label>
-            ))}
+            {/* Show choices if stem finished OR buzzed; for bonuses show during streaming as well */}
+            {(!streamFinished && !buzzed && !isBonusCurrent) ? (
+              <div className="text-sm text-black/60 dark:text-white/70">Choices will appear after the question is read.</div>
+            ) : (
+              fullMcChoices.map(([k, v], idx) => (
+                <label key={k} className={`flex items-baseline gap-2 ${canSelectMc ? 'cursor-pointer' : 'cursor-not-allowed opacity-75'}`}>
+                  <input
+                    type="radio"
+                    name={`tossup-mc-${current.id}`}
+                    value={k}
+                    checked={String(userAnswer) === String(k)}
+                    onChange={() => setUserAnswer(k)}
+                    className="accent-tint w-5 h-5"
+                    disabled={!canSelectMc}
+                  />
+                  <span className="practice-katex">
+                    {k.toUpperCase()}){' '}
+                    {idx < choiceStreamCount && v ? (
+                      <LatexRenderer>{v}</LatexRenderer>
+                    ) : (
+                      <span className="text-black/50 dark:text-white/50">…</span>
+                    )}
+                  </span>
+                </label>
+              ))
+            )}
           </div>
         ) : (
           <input
@@ -191,12 +725,21 @@ export default function PracticeMode({ questions, tournamentName }) {
             value={userAnswer}
             onChange={e => setUserAnswer(e.target.value)}
             placeholder="Type your answer"
+            ref={inputRef}
+            disabled={!canAnswer}
           />
         )}
         <div className="mt-4 flex gap-2">
-          <button className="btn btn-primary px-3 py-1.5 text-base" onClick={check} disabled={!userAnswer} title="Check answer">
-            <Check size={16} />
-          </button>
+          {(() => {
+            const canCheck = fullMcChoices.length > 0
+              ? ((isBonusCurrent || buzzed) && !!userAnswer)
+              : (canAnswer && !!userAnswer);
+            return (
+              <button className="btn btn-primary px-3 py-1.5 text-base" onClick={check} disabled={!canCheck} title="Check answer">
+                <Check size={16} />
+              </button>
+            );
+          })()}
           <button className="btn btn-ghost px-3 py-1.5 text-base" onClick={() => setShowAnswer(s => !s)} title={showAnswer ? 'Hide answer' : 'Reveal answer'}>
             {showAnswer ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
@@ -205,9 +748,21 @@ export default function PracticeMode({ questions, tournamentName }) {
           </button>
         </div>
         {result && (
-          <div className={`mt-4 rounded-xl px-4 py-3 ${result.correct ? 'bg-green-100' : 'bg-red-100'}`}>
+          <div
+            className={
+              `mt-4 rounded-xl px-4 py-3 border ` +
+              (result.correct
+                ? 'bg-green-100 text-green-900 border-green-200 dark:bg-green-900/20 dark:text-green-100 dark:border-green-800'
+                : 'bg-red-100 text-red-900 border-red-200 dark:bg-red-900/20 dark:text-red-100 dark:border-red-800')
+            }
+          >
             {result.correct ? 'Correct' : 'Incorrect'}
-            {result.reason ? <div className="text-sm text-black/70">{result.reason}</div> : null}
+            {result.reason ? <div className="text-sm text-black/70 dark:text-white/80">{result.reason}</div> : null}
+            {!result.correct && currentExplanation && (
+              <div className="mt-2 text-sm text-black/80 dark:text-white/80 whitespace-pre-line">
+                <span className="font-semibold">Explanation:</span> {currentExplanation}
+              </div>
+            )}
           </div>
         )}
         {showAnswer && (
@@ -221,6 +776,17 @@ export default function PracticeMode({ questions, tournamentName }) {
         {bonusState && (
           <div className="mt-8 border-t pt-6">
             <div className="font-semibold mb-2">Bonus</div>
+            {bonusVisualUrl && (
+              <div className="mb-3">
+                <img
+                  src={bonusVisualUrl}
+                  alt={`Visual bonus${bonusState?.bonus?.tournament ? ` • ${bonusState.bonus.tournament}` : ''}${bonusState?.bonus?.round ? ` • Round ${bonusState.bonus.round}` : ''}${bonusState?.bonus?.question_number != null ? ` • Q${bonusState.bonus.question_number}` : ''}`}
+                  className="max-h-64 rounded-md border border-black/10 dark:border-white/10 object-contain cursor-zoom-in hover:opacity-95 transition"
+                  onClick={() => setShowBonusVisualFull(true)}
+                />
+                <div className="text-xs text-black/60 dark:text-white/60 mt-1">Click image to view full screen</div>
+              </div>
+            )}
             <div className="mb-2 whitespace-pre-line text-lg practice-katex">
               <LatexRenderer>{bonusState.bonus.question}</LatexRenderer>
             </div>
@@ -262,9 +828,21 @@ export default function PracticeMode({ questions, tournamentName }) {
               </button>
             </div>
             {bonusState.result && (
-              <div className={`mt-4 rounded-xl px-4 py-3 ${bonusState.result.correct ? 'bg-green-100' : 'bg-red-100'}`}>
+              <div
+                className={
+                  `mt-4 rounded-xl px-4 py-3 border ` +
+                  (bonusState.result.correct
+                    ? 'bg-green-100 text-green-900 border-green-200 dark:bg-green-900/20 dark:text-green-100 dark:border-green-800'
+                    : 'bg-red-100 text-red-900 border-red-200 dark:bg-red-900/20 dark:text-red-100 dark:border-red-800')
+                }
+              >
                 {bonusState.result.correct ? 'Correct' : 'Incorrect'}
-                {bonusState.result.reason ? <div className="text-sm text-black/70">{bonusState.result.reason}</div> : null}
+                {bonusState.result.reason ? <div className="text-sm text-black/70 dark:text-white/80">{bonusState.result.reason}</div> : null}
+                {!bonusState.result.correct && bonusExplanation && (
+                  <div className="mt-2 text-sm text-black/80 dark:text-white/80 whitespace-pre-line">
+                    <span className="font-semibold">Explanation:</span> {bonusExplanation}
+                  </div>
+                )}
               </div>
             )}
             {bonusState.showAnswer && (
@@ -276,6 +854,29 @@ export default function PracticeMode({ questions, tournamentName }) {
           </div>
         )}
       </div>
+      {/* Full-screen overlays for current/bonus visuals */}
+      {showCurrentVisualFull && currentVisualUrl && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Visual bonus image">
+          <div className="absolute inset-0 bg-black/80" onClick={() => setShowCurrentVisualFull(false)} />
+          <div className="relative max-w-[96vw] max-h-[96vh] p-2">
+            <img src={currentVisualUrl} alt="Visual bonus full screen" className="max-w-[96vw] max-h-[92vh] object-contain rounded shadow-2xl" />
+            <button type="button" className="absolute -top-3 -right-3 bg-white text-black rounded-full shadow p-2 hover:bg-white/90 focus:outline-none" aria-label="Close full screen image" onClick={() => setShowCurrentVisualFull(false)}>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4"><path fillRule="evenodd" d="M4.22 4.22a.75.75 0 011.06 0L10 8.94l4.72-4.72a.75.75 0 111.06 1.06L11.06 10l4.72 4.72a.75.75 0 11-1.06 1.06L10 11.06l-4.72 4.72a.75.75 0 01-1.06-1.06L8.94 10 4.22 5.28a.75.75 0 010-1.06z" clipRule="evenodd" /></svg>
+            </button>
+          </div>
+        </div>
+      )}
+      {showBonusVisualFull && bonusVisualUrl && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Visual bonus image">
+          <div className="absolute inset-0 bg-black/80" onClick={() => setShowBonusVisualFull(false)} />
+          <div className="relative max-w-[96vw] max-h-[96vh] p-2">
+            <img src={bonusVisualUrl} alt="Visual bonus full screen" className="max-w-[96vw] max-h-[92vh] object-contain rounded shadow-2xl" />
+            <button type="button" className="absolute -top-3 -right-3 bg-white text-black rounded-full shadow p-2 hover:bg-white/90 focus:outline-none" aria-label="Close full screen image" onClick={() => setShowBonusVisualFull(false)}>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4"><path fillRule="evenodd" d="M4.22 4.22a.75.75 0 011.06 0L10 8.94l4.72-4.72a.75.75 0 111.06 1.06L11.06 10l4.72 4.72a.75.75 0 11-1.06 1.06L10 11.06l-4.72 4.72a.75.75 0 01-1.06-1.06L8.94 10 4.22 5.28a.75.75 0 010-1.06z" clipRule="evenodd" /></svg>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -22,7 +22,7 @@ export function RoundGeneratorSEO() {
   };
   return (
     <Helmet>
-      <title>Science Bowl Round Generator & Practice | Davidson Science Bowl</title>
+      <title>Round Generator & Practice | DA SciBowl</title>
       <meta name="description" content="Generate custom Science Bowl practice rounds instantly. Filter by tournament, practice toss-ups and bonuses, and prepare for competitions." />
       <link rel="canonical" href="https://sciencebowl.org/round-generator" />
       <script type="application/ld+json">{JSON.stringify(breadcrumb)}</script>

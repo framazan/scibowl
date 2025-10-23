@@ -43,6 +43,7 @@
       { "source": "/api/checkAnswer", "function": "checkAnswer" },
       { "source": "/signin", "destination": "/index.html" },
       { "source": "/round-generator", "destination": "/index.html" },
+      { "source": "/admin", "destination": "/index.html" },
   { "source": "/practice", "destination": "/index.html" },
       { "source": "/", "destination": "/index.html" }
     ],

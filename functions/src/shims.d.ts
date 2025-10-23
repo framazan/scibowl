@@ -1,1 +1,1 @@
-declare module 'string-similarity';
+// intentionally left empty

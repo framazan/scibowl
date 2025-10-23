@@ -4,7 +4,8 @@ import useAuth from '../data/useAuth';
 import { getFirebaseAuth } from '../firebase';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { Link } from 'react-router-dom';
-import { Home, Sun, Moon } from 'lucide-react';
+import { Home } from 'lucide-react';
+import MuiThemeSwitch from './MuiThemeSwitch.jsx';
 
 // Stable shell wrapper component (defined at module scope to avoid remounting on each render)
 function Shell({ children, dark, setDark }) {
@@ -16,14 +17,10 @@ function Shell({ children, dark, setDark }) {
           <Home size={14} aria-hidden="true" />
           <span>Home</span>
         </Link>
-        <button
-          onClick={() => setDark(d => !d)}
-          className="inline-flex items-center gap-1 text-xs px-3 py-1 rounded-full border border-black/10 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/10 transition"
-          aria-label="Toggle dark mode"
-        >
-          {dark ? <Sun size={14} aria-hidden="true" /> : <Moon size={14} aria-hidden="true" />}
-          <span>{dark ? 'Light' : 'Dark'}</span>
-        </button>
+        <MuiThemeSwitch
+          checked={dark}
+          onChange={setDark}
+        />
       </div>
       {children}
     </div>

@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "firebase deploy --only hosting --project scibowl-analytics",
+    "update-rules": "firebase deploy --only firestore:rules --project scibowl-analytics"
   },
   "dependencies": {
     "@react-pdf/renderer": "^3.4.5",

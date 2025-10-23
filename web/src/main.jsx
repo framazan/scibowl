@@ -15,6 +15,7 @@ const router = createBrowserRouter([
   { path: '/', element: <Navigate to="/round-generator" replace /> },
   { path: '/round-generator', element: <App /> },
   { path: '/practice', element: <App /> },
+  { path: '/admin', element: <App /> },
   { path: '/signin', element: <SignIn /> },
 ]);
 

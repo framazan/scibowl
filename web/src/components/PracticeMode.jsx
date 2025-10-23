@@ -246,7 +246,7 @@ export default function PracticeMode({ questions, tournamentName }) {
               </div>
             ) : (
               <input
-                className="w-full rounded-xl border border-black/10 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-tint text-lg"
+                className="w-full rounded-xl border border-black/10 bg-white dark:bg-darkcard text-black dark:text-white px-4 py-3 outline-none focus:ring-2 focus:ring-tint text-lg"
                 value={bonusState.userAnswer}
                 onChange={e => setBonusState(bs => ({ ...bs, userAnswer: e.target.value }))}
                 placeholder="Type your answer"

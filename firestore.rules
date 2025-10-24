@@ -14,15 +14,16 @@ service cloud.firestore {
 
     // Users can read/write their own metadata and rounds
     match /users/{uid}/meta/{docId} {
-      // Allow owners to read their own meta
-      allow read: if (request.auth != null && request.auth.uid == uid);
-      // Users may write only their own meta
+      // Allow owners to read and write their own meta
+      allow read: if request.auth != null && request.auth.uid == uid;
       allow write: if request.auth != null && request.auth.uid == uid;
     }
 
     match /users/{uid}/rounds/{roundId} {
-      // Allow owners to read their own rounds
-      allow read: if (request.auth != null && request.auth.uid == uid);
+      // Allow owners to read their own rounds; additionally, allow public read of admin's rounds
+      // so the client can inspect preset candidates without requiring auth.
+      allow read: if (request.auth != null && request.auth.uid == uid)
+                   || (uid == 'fkLJJ2R6HbdwqoXSxrLUybZ0IdH2');
       allow write: if request.auth != null && request.auth.uid == uid;
     }
   }

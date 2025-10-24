@@ -9,6 +9,7 @@ import { useEffect } from 'react';
 import useAuth from './data/useAuth.js';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { RoundGeneratorSEO, PracticeSEO } from './components/SEO.jsx';
+import { useRoundSession } from '../context/RoundSessionContext.jsx';
 // import AdSlot from './components/AdSlot.jsx'; // Uncomment when you have a real slot id
 
 function TabButton({ active, children, onClick }) {
@@ -32,6 +33,8 @@ export default function App() {
   // Derive tab from pathname
   const tab = location.pathname.startsWith('/practice') ? 'practice' : location.pathname.startsWith('/admin') ? 'admin' : 'generate';
   const [dark, setDark] = useState(() => window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  // Persist generated round across tab switches (reset on page refresh) via context
+  const { generatedPairs: persistedGenerated, setGeneratedPairs: setPersistedGenerated, pushGeneratedRound } = useRoundSession();
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
@@ -114,7 +117,7 @@ export default function App() {
             ) : tab === 'admin' ? (
               <Admin auth={auth} />
             ) : (
-              <RoundGenerator lazy={q} auth={auth} />
+              <RoundGenerator lazy={q} auth={auth} persistedGenerated={persistedGenerated} setPersistedGenerated={setPersistedGenerated} onNewRound={pushGeneratedRound} />
             )}
           </div>
         )}
@@ -135,6 +138,7 @@ export default function App() {
           </div>
         </div>
       </footer>
+  {/* <DebugRoundStorage /> */}
     </div>
   );
 }

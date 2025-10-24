@@ -32,6 +32,20 @@
   <meta name="theme-color" content="#ffffff" />
   <meta name="mobile-web-app-capable" content="yes" />
 
+  <!-- Apply dark mode class ASAP based on saved preference or system to avoid flashes -->
+  <script>
+    (function() {
+      try {
+        var pref = localStorage.getItem('themePreference') || 'system';
+        var systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var dark = (pref === 'dark') || (pref === 'system' && systemDark);
+        if (dark) document.documentElement.classList.add('dark');
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', dark ? '#000000' : '#ffffff');
+      } catch (e) {}
+    })();
+  </script>
+
   <!-- Structured Data JSON-LD -->
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"WebApplication","name":"Science Bowl Round Generator","url":"https://www.sciencebowl.org/","applicationCategory":"EducationalApplication","description":"Generate custom Science Bowl practice rounds instantly.","operatingSystem":"Any","creator":{"@type":"Organization","name":"Davidson Science Bowl"}}

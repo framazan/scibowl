@@ -1,0 +1,181 @@
+swagger: "2.0"
+info:
+  title: SciBowl Functions API
+  description: Google API Gateway in front of Firebase Cloud Functions
+  version: "1.0.0"
+
+host: vertex-gateway-7e74h6s4.uc.gateway.dev
+schemes:
+  - https
+
+x-google-endpoints:
+  - name: vertex-gateway-7e74h6s4.uc.gateway.dev
+    allowCors: true
+
+x-google-management:
+  metrics:
+    - name: "check-mc-request"
+      displayName: "MC answer requests"
+      valueType: INT64
+      metricKind: DELTA
+    - name: "check-bonus-request"
+      displayName: "Bonus answer requests"
+      valueType: INT64
+      metricKind: DELTA
+  quota:
+    limits:
+      - name: "check-mc-limit"
+        metric: "check-mc-request"
+        unit: "1/min/{project}"
+        values:
+          STANDARD: 200
+      - name: "check-bonus-limit"
+        metric: "check-bonus-request"
+        unit: "1/min/{project}"
+        values:
+          STANDARD: 200
+
+paths:
+  /checkAnswerMC:
+    options:
+      summary: CORS preflight for checkAnswerMC
+      operationId: checkAnswerMCOptions
+      parameters:
+        - in: header
+          name: Origin
+          type: string
+          required: false
+        - in: header
+          name: Access-Control-Request-Method
+          type: string
+          required: false
+        - in: header
+          name: Access-Control-Request-Headers
+          type: string
+          required: false
+      responses:
+        "204":
+          description: Preflight OK
+      x-google-backend:
+        address: https://us-central1-scibowl-analytics.cloudfunctions.net/checkAnswerMC
+    post:
+      summary: Grade a multiple-choice answer
+      operationId: checkAnswerMC
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - in: query
+          name: key
+          type: string
+          required: true
+          description: API key
+        - in: header
+          name: X-Firebase-AppCheck
+          type: string
+          required: true
+          description: Firebase App Check token
+        - in: body
+          name: body
+          description: Payload containing user answer, official answer, optional question text and choices
+          required: true
+          schema:
+            type: object
+            properties:
+              userAnswer:
+                type: string
+              correctAnswer:
+                type: string
+              question:
+                type: string
+              choices:
+                type: array
+                items:
+                  type: string
+            required:
+              - userAnswer
+              - correctAnswer
+      x-google-backend:
+        address: https://us-central1-scibowl-analytics.cloudfunctions.net/checkAnswerMC
+      x-google-quota:
+        metricCosts:
+          "check-mc-request": 1
+      security:
+        - api_key: []
+      responses:
+        "200":
+          description: Successful response
+
+  /checkAnswerBonus:
+    options:
+      summary: CORS preflight for checkAnswerBonus
+      operationId: checkAnswerBonusOptions
+      parameters:
+        - in: header
+          name: Origin
+          type: string
+          required: false
+        - in: header
+          name: Access-Control-Request-Method
+          type: string
+          required: false
+        - in: header
+          name: Access-Control-Request-Headers
+          type: string
+          required: false
+      responses:
+        "204":
+          description: Preflight OK
+      x-google-backend:
+        address: https://us-central1-scibowl-analytics.cloudfunctions.net/checkAnswerBonus
+    post:
+      summary: Grade a short-answer bonus response
+      operationId: checkAnswerBonus
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - in: query
+          name: key
+          type: string
+          required: true
+          description: API key
+        - in: header
+          name: X-Firebase-AppCheck
+          type: string
+          required: true
+          description: Firebase App Check token
+        - in: body
+          name: body
+          description: Payload containing user answer, official answer, and optional question text
+          required: true
+          schema:
+            type: object
+            properties:
+              userAnswer:
+                type: string
+              correctAnswer:
+                type: string
+              question:
+                type: string
+            required:
+              - userAnswer
+              - correctAnswer
+      x-google-backend:
+        address: https://us-central1-scibowl-analytics.cloudfunctions.net/checkAnswerBonus
+      x-google-quota:
+        metricCosts:
+          "check-bonus-request": 1
+      security:
+        - api_key: []
+      responses:
+        "200":
+          description: Successful response
+
+securityDefinitions:
+  api_key:
+    type: apiKey
+    name: key
+    in: query

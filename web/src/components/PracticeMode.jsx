@@ -5,6 +5,7 @@ import { useFilters } from './roundGenerator/hooks/useFilters.js';
 import TournamentSelector from './roundGenerator/components/TournamentSelector.jsx';
 import { parseMCChoices as parseMCChoicesRG, findBonus as findBonusRG } from './roundGenerator/utils/helpers.js';
 import { isVisualBonus, getVisualBonusUrl } from '../data/visualBonuses.js';
+import { checkAnswerMC as apiCheckMC, checkAnswerBonus as apiCheckBonus } from '../api/client.js';
 
 function pickRandom(arr, predicate = () => true) {
   const pool = arr.filter(predicate);
@@ -68,11 +69,6 @@ function parseMCChoices(q) {
   // Return in w/x/y/z order
   const byKey = new Map(entries);
   return order.map(k => [k, byKey.get(k)]).filter(([_, v]) => v != null);
-}
-function truthy(v) {
-  if (v === true) return true;
-  const s = String(v ?? '').trim().toLowerCase();
-  return s === 'true' || s === '1' || s === 'yes' || s === 'y';
 }
 
 export default function PracticeMode({ questions = [], tournamentName = null, lazy = null }) {
@@ -149,6 +145,8 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
 
   const [current, setCurrent] = useState(null);
   const [userAnswer, setUserAnswer] = useState('');
+  // For MC tossup interrupts: optional typed answer
+  const [mcTypedAnswer, setMcTypedAnswer] = useState('');
   const [result, setResult] = useState(null);
   const [showAnswer, setShowAnswer] = useState(false);
   const [bonusState, setBonusState] = useState(null); // {bonus, userAnswer, result, showAnswer}
@@ -170,6 +168,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
     const pred = preferredType ? (q => q.question_type?.toLowerCase() === preferredType) : (() => true);
     setCurrent(pickRandom(practicePool, pred));
     setUserAnswer('');
+    setMcTypedAnswer('');
     setResult(null);
     setShowAnswer(false);
     setBonusState(null);
@@ -201,23 +200,27 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
   async function check() {
     try {
       let data;
-      if (mcChoices.length > 0) {
+      const isTossup = current?.question_type?.toLowerCase() === 'tossup';
+      const typed = String(mcTypedAnswer || '').trim();
+      if (mcChoices.length > 0 && !(isTossup && typed.length > 0)) {
+        // Default MC path (radio W/X/Y/Z) unless in typed mode for tossup
         data = localCheckMultipleChoice(userAnswer, current);
       } else {
-        const res = await fetch('/api/checkAnswer', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userAnswer,
-            correctAnswer: current.answer,
-            question: current.question,
-          })
-        });
+        // Use specialized MC endpoint when typed answer for MC tossup; otherwise use short-answer endpoint
+        const useMcEndpoint = (mcChoices.length > 0 && isTossup && typed.length > 0);
+        const body = {
+          userAnswer: (mcChoices.length > 0 && isTossup && typed.length > 0) ? mcTypedAnswer : userAnswer,
+          correctAnswer: current.answer,
+          question: current.question,
+        };
+        if (useMcEndpoint) {
+          body.choices = mcChoices; // provide choices context for LLM
+        }
+        const res = useMcEndpoint ? await apiCheckMC(body) : await apiCheckBonus(body);
         data = await res.json();
       }
       setResult(data);
       // If correct on a toss-up, show bonus if available
-      const isTossup = current?.question_type?.toLowerCase() === 'tossup';
       if (data.correct && isTossup) {
         const bonus = findBonusRG(current, practicePool);
         if (bonus) {
@@ -243,14 +246,10 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
       if (bonusChoices.length > 0) {
         data = localCheckMultipleChoice(bonusState.userAnswer, bonusState.bonus);
       } else {
-        const res = await fetch('/api/checkAnswer', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userAnswer: bonusState.userAnswer,
-            correctAnswer: bonusState.bonus.answer,
-            question: bonusState.bonus.question,
-          })
+        const res = await apiCheckBonus({
+          userAnswer: bonusState.userAnswer,
+          correctAnswer: bonusState.bonus.answer,
+          question: bonusState.bonus.question,
         });
         data = await res.json();
       }
@@ -387,6 +386,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
                   if (next) {
                     setCurrent(next);
                     setUserAnswer('');
+                    setMcTypedAnswer('');
                     setResult(null);
                     setShowAnswer(false);
                     setBonusState(null);
@@ -401,6 +401,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
             setCurrent={(q) => {
               setCurrent(q);
               setUserAnswer('');
+              setMcTypedAnswer('');
               setResult(null);
               setShowAnswer(false);
               setBonusState(null);
@@ -409,6 +410,8 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
             preferredType={preferredType}
             userAnswer={userAnswer}
             setUserAnswer={setUserAnswer}
+            mcTypedAnswer={mcTypedAnswer}
+            setMcTypedAnswer={setMcTypedAnswer}
             result={result}
             setResult={setResult}
             showAnswer={showAnswer}
@@ -425,7 +428,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
   );
 }
 
-function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAnswer, setUserAnswer, result, setResult, showAnswer, setShowAnswer, bonusState, setBonusState, check, checkBonus, readingSpeed }) {
+function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAnswer, setUserAnswer, mcTypedAnswer, setMcTypedAnswer, result, setResult, showAnswer, setShowAnswer, bonusState, setBonusState, check, checkBonus, readingSpeed }) {
   const mcChoices = useMemo(() => parseMCChoices(current), [current]);
   const [currentVisualUrl, setCurrentVisualUrl] = React.useState(null);
   const [showCurrentVisualFull, setShowCurrentVisualFull] = React.useState(false);
@@ -437,6 +440,7 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
   const [displayedWordCount, setDisplayedWordCount] = useState(0);
   const [streamingActive, setStreamingActive] = useState(true);
   const inputRef = useRef(null);
+  const mcTypedInputRef = useRef(null);
 
   // Multiple-choice answer streaming (after the question finishes)
   const [choiceStreamCount, setChoiceStreamCount] = useState(0); // how many choices text are revealed (0..4)
@@ -546,7 +550,9 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
           checkBonus();
           return;
         }
-        const mcReady = mcChoices.length > 0 ? ((isBonusCurrent || buzzed) && !!userAnswer) : (canAnswer && String(userAnswer).trim().length > 0);
+        const mcReady = mcChoices.length > 0
+          ? ((isBonusCurrent || buzzed) && (!isBonusCurrent && buzzed ? (String(mcTypedAnswer).trim().length > 0 || !!userAnswer) : !!userAnswer))
+          : (canAnswer && String(userAnswer).trim().length > 0);
         if (mcReady) {
           e.preventDefault();
           check();
@@ -571,10 +577,18 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
           setUserAnswer(k);
         }
       }
+
+      // 't' to focus typed textbox on MC tossup interrupt
+      if (!isTypingInInput(target) && !isBonusCurrent && buzzed && mcChoices.length > 0) {
+        if (key === 't' || key === 'T') {
+          e.preventDefault();
+          setTimeout(() => mcTypedInputRef.current?.focus(), 0);
+        }
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [buzzed, streamingActive, mcChoices.length, canAnswer, userAnswer, bonusState]);
+  }, [buzzed, streamingActive, mcChoices.length, canAnswer, userAnswer, bonusState, mcTypedAnswer]);
 
   // Load visual image for current if it's a bonus and flagged as visual
   useEffect(() => {
@@ -691,7 +705,7 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
         <label className="block text-sm font-medium mb-2">Your answer</label>
         {/* Show radio buttons for MC, textbox for short answer only */}
         {Array.isArray(mcChoices) && mcChoices.length > 0 ? (
-          <div className="space-y-2 text-lg mb-4">
+          <div className="space-y-3 text-lg mb-4">
             {/* Show choices if stem finished OR buzzed; for bonuses show during streaming as well */}
             {(!streamFinished && !buzzed && !isBonusCurrent) ? (
               <div className="text-sm text-black/60 dark:text-white/70">Choices will appear after the question is read.</div>
@@ -718,6 +732,17 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
                 </label>
               ))
             )}
+            {/* Textbox appears under MC choices on interrupt (tossup only) */}
+            {(!isBonusCurrent && buzzed) && (
+              <input
+                className="w-full rounded-xl border border-black/10 bg-white dark:bg-darkcard text-black dark:text-white px-4 py-3 outline-none focus:ring-2 focus:ring-tint text-lg"
+                value={mcTypedAnswer}
+                onChange={e => setMcTypedAnswer(e.target.value)}
+                placeholder="Type your answer (press “t” to focus)"
+                ref={mcTypedInputRef}
+                disabled={!canSelectMc}
+              />
+            )}
           </div>
         ) : (
           <input
@@ -732,7 +757,7 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
         <div className="mt-4 flex gap-2">
           {(() => {
             const canCheck = fullMcChoices.length > 0
-              ? ((isBonusCurrent || buzzed) && !!userAnswer)
+              ? ((isBonusCurrent || buzzed) && (!isBonusCurrent && buzzed ? (String(mcTypedAnswer).trim().length > 0 || !!userAnswer) : !!userAnswer))
               : (canAnswer && !!userAnswer);
             return (
               <button className="btn btn-primary px-3 py-1.5 text-base" onClick={check} disabled={!canCheck} title="Check answer">

@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useRef } from 'react';
+import { idbGet } from '../data/idb.js';
 import { AlertTriangle, Plus, Minus, FileDown, CloudCheck, Trash2, ChevronRight, ChevronUp, ChevronDown, ArrowUp, List, RefreshCw, FolderPlus, Pencil, Maximize2, Play } from 'lucide-react';
 import LatexRenderer from './LatexRenderer.jsx';
 import { getRoundsIndex, getRoundDetail, saveUserRound, buildExcludeSetFromRound, renameUserRound, syncUserRoundsCache, deleteUserRound, setUserRoundFolder, getRoundFolders, addRoundFolder, renameRoundFolder, deleteRoundFolder } from '../data/rounds.firestore.js';
@@ -17,8 +18,10 @@ import RoundPdfContent from './roundGenerator/components/RoundPdfContent.jsx';
 import SearchBar from './roundGenerator/components/SearchBar.jsx';
 import ScorekeeperPane from './roundGenerator/components/ScorekeeperPane.jsx';
 import SubstitutionModal from './roundGenerator/components/SubstitutionModal.jsx'; // New modal for structured player substitutions
+import { checkAnswerMC as apiCheckMC, checkAnswerBonus as apiCheckBonus } from '../api/client.js';
+import { useRoundSession } from '../context/RoundSessionContext.jsx';
 
-export default function RoundGenerator({ questions = [], lazy = null, auth = null }) {
+export default function RoundGenerator({ questions = [], lazy = null, auth = null, persistedGenerated = null, setPersistedGenerated = null, onNewRound = null }) {
   // Filters, tournaments, rounds, and ranges
   const {
     isLazy,
@@ -83,8 +86,48 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
   // Track if the user has attempted a generation (used for empty-results messaging)
   const [generationAttempted, setGenerationAttempted] = useState(false);
   const [count, setCount] = useState(10);
-  const [generated, setGenerated] = useState([]);
-  const [questionType, setQuestionType] = useState('both'); // 'both', 'tossup', 'bonus'
+  // Generated round pairs: use externally managed state if provided (to persist across tab switches)
+  const [localGenerated, setLocalGenerated] = useState([]);
+  const generated = Array.isArray(persistedGenerated) ? persistedGenerated : localGenerated;
+  const setGenerated = typeof setPersistedGenerated === 'function' ? setPersistedGenerated : setLocalGenerated;
+  // Session history paginator (previously generated rounds this session)
+  const { history } = useRoundSession();
+  const [histPos, setHistPos] = useState(null);
+  React.useEffect(() => {
+    if (Array.isArray(history) && history.length > 0) setHistPos(history.length - 1);
+    else setHistPos(null);
+  }, [history]);
+  function loadHistoryAt(pos) {
+    if (!Array.isArray(history) || history.length === 0) return;
+    if (pos < 0 || pos >= history.length) return;
+    setCommittedSearch('');
+    setHistPos(pos);
+    const pairs = history[pos] || [];
+    setGenerated(pairs);
+    setHasUnsavedRound(true);
+    resetScorekeeping();
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
+  }
+  // Question type selection now driven by checkboxes
+  const [includeTossups, setIncludeTossups] = useState(true);
+  const [includeBonuses, setIncludeBonuses] = useState(true);
+  const [includeVisualBonuses, setIncludeVisualBonuses] = useState(false);
+  const [questionType, setQuestionType] = useState('both'); // derived legacy mode for compatibility
+  // Allow visual bonuses in paired mode (when both tossups and bonuses selected)
+  const allowVisualInPairs = includeTossups && includeBonuses && includeVisualBonuses;
+  // Allow visual bonuses when generating bonus-only rounds (both bonus types selected without tossups)
+  const allowVisualInBonusOnly = !includeTossups && includeBonuses && includeVisualBonuses;
+  // Keep legacy questionType in sync for existing logic, scorekeeper, and saving
+  React.useEffect(() => {
+    let mode = 'both';
+    if (includeTossups && includeBonuses) mode = 'both';
+    else if (includeTossups && !includeBonuses) mode = 'tossup';
+    else if (!includeTossups && includeBonuses && !includeVisualBonuses) mode = 'bonus';
+    else if (!includeTossups && !includeBonuses && includeVisualBonuses) mode = 'visual-bonus';
+    else if (!includeTossups && includeBonuses && includeVisualBonuses) mode = 'bonus'; // bonus-only but allow visuals
+    else mode = 'both'; // fallback
+    setQuestionType(mode);
+  }, [includeTossups, includeBonuses, includeVisualBonuses]);
   const pdfRef = React.useRef(null);
   const QUESTIONS_PER_PAGE = 2;
   const [pdfLoading, setPdfLoading] = useState(false);
@@ -123,6 +166,12 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
   const [currentIndex, setCurrentIndex] = useState(0); // index of active pair (tossup/bonus)
   const [awaitingPlayer, setAwaitingPlayer] = useState(null); // { type: 'correct'|'incorrect', interrupt: boolean }
   const [interruptArmed, setInterruptArmed] = useState(false); // toggled when Interrupt button pressed prior to correct/incorrect
+  // Typed-answer on interrupt (LLM check) state
+  const [typedAnswerActive, setTypedAnswerActive] = useState(false); // when true, clicking a player selects them for typed-answer flow instead of immediately logging
+  const [typedAnswerText, setTypedAnswerText] = useState('');
+  const [typedAnswerPlayerId, setTypedAnswerPlayerId] = useState(null);
+  const [typedAnswerLoading, setTypedAnswerLoading] = useState(false);
+  const [typedAnswerReason, setTypedAnswerReason] = useState('');
   // tossupResults: final outcome snapshot for each tossup. We augment with an `attempts` array so we can track first incorrect then rebound attempt without losing penalty points.
   const [tossupResults, setTossupResults] = useState([]); // per index: { result?, playerId?, interrupt?, points, attempts?: [{ playerId, team, result, interrupt, points }] }
   const [bonusResults, setBonusResults] = useState([]); // per index: { points: number, team: 'A'|'B' }
@@ -226,6 +275,28 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
   function handleSeatClick(idx) {
     const p = players[idx];
     if (!p) return;
+    // If we're in typed-answer flow, clicking a seat selects the player and returns early
+    if (typedAnswerActive) {
+      if (!allowedTeams.includes(p.team)) {
+        pushToast(`Team ${p.team} not allowed to buzz now.`, 'error');
+        return;
+      }
+      if (p.status === 'replaced') {
+        pushToast('Cannot buzz: seat replaced.', 'error');
+        return;
+      }
+      // In tryouts mode, ensure this player hasn't already attempted on this tossup
+      if (tryoutsMode && questionType === 'tossup') {
+        const attempts = (tossupResults[currentIndex]?.attempts) || [];
+        if (attempts.some(a => a.playerId === p.id)) {
+          pushToast('This player already attempted this toss-up.', 'error');
+          return;
+        }
+      }
+      setTypedAnswerPlayerId(p.id);
+      pushToast(`Selected ${p.name || `Seat ${p.team}${p.seat ?? ''}`} for typed interrupt.`, 'info', 2500);
+      return;
+    }
     if (p.status === 'replaced') {
       pushToast('Cannot buzz: seat replaced.', 'error');
       return;
@@ -306,6 +377,108 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
     } else {
       const name = window.prompt('Rename player', p.name);
       if (name != null) setPlayers(list => list.map((pl, i) => i === idx ? { ...pl, name: name.trim() } : pl));
+    }
+  }
+
+  // Internal helper to record an attempt for a given player, used by typed-answer flow
+  function recordAttemptForPlayer({ player, type, interrupt }) {
+    if (!player) return;
+    const isFirstAttempt = attemptedTeam == null;
+    setTossupResults(res => {
+      const next = [...res];
+      const attemptPoints = type === 'correct' ? 4 : (type === 'incorrect' && interrupt ? -4 : 0);
+      const prev = next[currentIndex] || {};
+      const attempts = Array.isArray(prev.attempts) ? [...prev.attempts] : [];
+      attempts.push({ playerId: player.id, team: player.team, result: type, interrupt, points: attemptPoints });
+      if (type === 'correct') {
+        next[currentIndex] = { ...prev, attempts, result: 'correct', playerId: player.id, interrupt, points: attemptPoints };
+      } else {
+        next[currentIndex] = { ...prev, attempts, result: 'incorrect', playerId: player.id, interrupt, points: attemptPoints };
+      }
+      return next;
+    });
+    // Update player stats
+    setPlayers(list => list.map(pl => pl.id === player.id ? ({
+      ...pl,
+      stats: {
+        ...pl.stats,
+        correct: pl.stats.correct + (type === 'correct' && !interrupt ? 1 : 0),
+        incorrect: pl.stats.incorrect + (type === 'incorrect' && !interrupt ? 1 : 0),
+        correctInterrupt: pl.stats.correctInterrupt + (type === 'correct' && interrupt ? 1 : 0),
+        incorrectInterrupt: pl.stats.incorrectInterrupt + (type === 'incorrect' && interrupt ? 1 : 0),
+      }
+    }) : pl));
+    // Clear awaiting/interrupt flags if set (typed-answer path sets none normally)
+    setAwaitingPlayer(null);
+    setInterruptArmed(false);
+    if (type === 'incorrect') {
+      if (isFirstAttempt) {
+        if (tryoutsMode && questionType === 'tossup') {
+          setAttemptedTeam(null);
+          setAllowedTeams(['A','B']);
+        } else {
+          setAttemptedTeam(player.team);
+          setAllowedTeams([player.team === 'A' ? 'B' : 'A']);
+        }
+      } else {
+        // both teams have attempted and missed
+        setAttemptedTeam(null);
+        setAllowedTeams([]);
+        setTimeout(() => advanceIfReady(), 200);
+      }
+    } else if (type === 'correct') {
+      setAttemptedTeam(null);
+      setAllowedTeams([]);
+      const pair = displayPairs[currentIndex];
+      if (!(pair?.bonus && pair.tossup)) {
+        setTimeout(() => advanceIfReady(), 150);
+      } else {
+        setBonusInput('');
+      }
+    }
+  }
+
+  async function checkTypedAnswerWithLLM() {
+    try {
+      if (!typedAnswerActive) return;
+      const pair = displayPairs[currentIndex];
+      const tossup = pair?.tossup;
+      if (!tossup) { pushToast('No toss-up at this question.', 'error'); return; }
+      if (!typedAnswerPlayerId) { pushToast('Select a player seat first.', 'error'); return; }
+      const player = players.find(p => p.id === typedAnswerPlayerId);
+      if (!player) { pushToast('Invalid player selection.', 'error'); return; }
+      const ua = String(typedAnswerText || '').trim();
+      if (!ua) { pushToast('Enter an answer to check.', 'error'); return; }
+      setTypedAnswerLoading(true);
+      setTypedAnswerReason('');
+      // Post to backend function: use MC checker if tossup has choices (typed interrupt), else short-answer checker
+      const tuChoices = parseMCChoices(tossup);
+      const isMC = Array.isArray(tuChoices) && tuChoices.length > 0;
+      const payload = { userAnswer: ua, correctAnswer: tossup.answer, question: tossup.question };
+      if (isMC) { (payload).choices = tuChoices; }
+      const resp = await (isMC ? apiCheckMC(payload) : apiCheckBonus(payload)).catch(err => ({ ok: false, statusText: err?.message }));
+      if (!resp || !resp.ok) {
+        pushToast('AI check failed. You can record manually.', 'error');
+        return;
+      }
+      const data = await resp.json().catch(() => ({}));
+      const correct = !!data?.correct;
+      const reason = typeof data?.reason === 'string' ? data.reason : '';
+      setTypedAnswerReason(reason || '');
+      // Record attempt with interrupt = true
+      recordAttemptForPlayer({ player, type: correct ? 'correct' : 'incorrect', interrupt: true });
+      pushToast(correct ? 'AI: Correct interrupt.' : 'AI: Incorrect interrupt.', correct ? 'success' : 'error');
+    } catch (e) {
+      console.error(e);
+      pushToast('AI check encountered an error.', 'error');
+    } finally {
+      setTypedAnswerLoading(false);
+      // reset typed-answer panel but keep reason briefly
+      setTypedAnswerActive(false);
+      setTypedAnswerText('');
+      setTypedAnswerPlayerId(null);
+      // Clear reason after a short delay
+      setTimeout(() => setTypedAnswerReason(''), 4000);
     }
   }
 
@@ -398,6 +571,9 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
     setAllowedTeams(['A','B']);
     setAwaitingPlayer(null);
     setInterruptArmed(false);
+    setTypedAnswerActive(false);
+    setTypedAnswerText('');
+    setTypedAnswerPlayerId(null);
     pushToast('Question replaced.', 'info');
   }
 
@@ -475,7 +651,7 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
       }
     }
     // Helper: balanced sampling across categories
-    function balancedSample(all, desired) {
+  function balancedSample(all, desired) {
       if (all.length === 0 || desired <= 0) return [];
       // Determine which categories to use (respect selection but ignore ones with zero items)
       const byCat = new Map();
@@ -527,7 +703,7 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
     }
 
     let pairs = [];
-    if (questionType === 'tossup') {
+  if (questionType === 'tossup') {
       const pool = validQuestions.filter(q =>
         (selectedTournaments.length ? selectedTournaments.includes(q.tournament) : true) &&
         inRanges(q) &&
@@ -546,8 +722,8 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
         (selectedTournaments.length ? selectedTournaments.includes(q.tournament) : true) &&
         inRanges(q) &&
         q.question_type?.toLowerCase() === 'bonus' &&
-        // exclude any visual bonuses from regular bonus mode
-        !isVisualBonus(q) &&
+        // include visuals only if allowed in bonus-only mode
+        (allowVisualInBonusOnly ? true : !isVisualBonus(q)) &&
         !excludeSet.has(q.id)
       );
       const picks = pool.length <= count ? [...pool] : balancedSample(pool, count);
@@ -573,12 +749,20 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
       pairs = picks.map(bonus => ({ tossup: null, bonus }));
     } else {
       // Both: balance based on tossups only; bonuses are paired when possible.
-      const tossupPool = validQuestions.filter(q =>
+      const tossupPoolRaw = validQuestions.filter(q =>
         (selectedTournaments.length ? selectedTournaments.includes(q.tournament) : true) &&
         inRanges(q) &&
         q.question_type?.toLowerCase() === 'tossup' &&
         !excludeSet.has(q.id)
       );
+      // Only include tossups that have an eligible paired bonus (respect visual flag)
+      const tossupPool = tossupPoolRaw.filter(tu => {
+        const bonus = findBonus(tu, validQuestions);
+        if (!bonus) return false;
+        if (excludeSet.has(bonus.id)) return false;
+        if (!allowVisualInPairs && isVisualBonus(bonus)) return false;
+        return true;
+      });
       const tossupPicks = tossupPool.length <= count ? [...tossupPool] : balancedSample(tossupPool, count);
       for (let i = tossupPicks.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -586,7 +770,7 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
       }
       pairs = tossupPicks.map(tossup => {
         const bonus = findBonus(tossup, validQuestions);
-        const finalBonus = (bonus && !isVisualBonus(bonus) && !excludeSet.has(bonus.id)) ? bonus : null;
+        const finalBonus = (bonus && (allowVisualInPairs || !isVisualBonus(bonus)) && !excludeSet.has(bonus.id)) ? bonus : null;
         return { tossup, bonus: finalBonus };
       });
     }
@@ -620,7 +804,7 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
   }, [committedSearch, validQuestions]);
 
   // Decide what to display
-  const displayPairs = committedSearch.trim() ? searchResults : generated;
+  const displayPairs = (committedSearch.trim() && generated.length > 0) ? searchResults : generated;
   // Build official scoresheet rows AFTER displayPairs is defined to avoid TDZ errors.
   const sheetRows = useMemo(() => {
     const rows = [];
@@ -683,6 +867,11 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
       // If searching, skip random generation; UI will show search results.
       return;
     }
+    // Validate at least one question type is selected
+    if (!includeTossups && !includeBonuses && !includeVisualBonuses) {
+      pushToast('Select at least one question type (Toss-ups, Bonuses, or Visual bonuses).', 'error');
+      return;
+    }
     setGenerationAttempted(true);
     // If an unsaved round exists, prompt user before overwriting unless forced
     if (!force && generated.length > 0 && hasUnsavedRound) {
@@ -699,9 +888,9 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
       count,
       questionType,
     });
-    // Generate from the selected filters
-    const pairs = computePairs();
-    setGenerated(pairs);
+    // ...existing code...
+  const pairs = computePairs();
+  if (typeof onNewRound === 'function') onNewRound(pairs); else setGenerated(pairs);
     if (pairs.length === 0) {
       pushToast('No questions match the criteria provided.', 'error', 5000);
     }
@@ -874,6 +1063,32 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
     }
   }
 
+  // Restore last generated round from localStorage (ids + tournaments) if nothing currently loaded
+  React.useEffect(() => {
+    if (generated && generated.length > 0) return;
+    (async () => {
+      try {
+        const meta = await idbGet('sb_current_round_meta');
+        if (!Array.isArray(meta) || meta.length === 0) return;
+        // Determine tournaments to load
+        const tset = new Set();
+        for (const rec of meta) { if (rec?.tu?.tournament) tset.add(rec.tu.tournament); if (rec?.bo?.tournament) tset.add(rec.bo.tournament); }
+        const tlist = Array.from(tset);
+        try { if (isLazy && tlist.length) { await lazy.ensureLoaded(tlist); } } catch {}
+        const sourceQs = isLazy ? lazy.getLoadedQuestions(tlist.length ? tlist : selectedTournaments) : validQuestions;
+        const byId = new Map(sourceQs.map(q => [q.id, q]));
+        const pairs = meta.map(rec => ({
+          tossup: rec?.tu?.id ? (byId.get(rec.tu.id) || null) : null,
+          bonus: rec?.bo?.id ? (byId.get(rec.bo.id) || null) : null,
+        })).filter(p => p.tossup || p.bonus);
+        if (pairs.length > 0) {
+          setGenerated(pairs);
+        }
+      } catch {}
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLazy, lazy, validQuestions]);
+
   return (
     <div
   className={`grid gap-6 md:grid-cols-3 max-w-[100vw] w-full overflow-x-hidden ${scorekeeping ? 'transition-all' : ''}`}
@@ -886,21 +1101,19 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
           setSearchInput={setSearchInput}
           committedSearch={committedSearch}
           setCommittedSearch={setCommittedSearch}
+          hasGenerated={generated.length > 0}
         />
         <div>
-          <div className="font-semibold mb-2">Question Type</div>
-          <div className="flex gap-2">
-            <label className="chip cursor-pointer">
-              <input type="radio" name="qtype" value="both" checked={questionType === 'both'} onChange={() => setQuestionType('both')} className="mr-1" /> Both
+          <div className="font-semibold mb-2">Question Types</div>
+          <div className="flex gap-2 flex-wrap">
+            <label className={`chip cursor-pointer ${includeTossups ? 'ring-1 ring-tint bg-tint/10' : ''}`}>
+              <input type="checkbox" className="mr-1" checked={includeTossups} onChange={e => setIncludeTossups(e.target.checked)} /> Toss-ups
             </label>
-            <label className="chip cursor-pointer">
-              <input type="radio" name="qtype" value="tossup" checked={questionType === 'tossup'} onChange={() => setQuestionType('tossup')} className="mr-1" /> Toss-ups
+            <label className={`chip cursor-pointer ${includeBonuses ? 'ring-1 ring-tint bg-tint/10' : ''}`}>
+              <input type="checkbox" className="mr-1" checked={includeBonuses} onChange={e => setIncludeBonuses(e.target.checked)} /> Bonuses
             </label>
-            <label className="chip cursor-pointer">
-              <input type="radio" name="qtype" value="bonus" checked={questionType === 'bonus'} onChange={() => setQuestionType('bonus')} className="mr-1" /> Bonuses
-            </label>
-            <label className="chip cursor-pointer" title="Bonuses that have associated visual images">
-              <input type="radio" name="qtype" value="visual-bonus" checked={questionType === 'visual-bonus'} onChange={() => setQuestionType('visual-bonus')} className="mr-1" /> Visual bonuses
+            <label className={`chip cursor-pointer ${includeVisualBonuses ? 'ring-1 ring-tint bg-tint/10' : ''}`} title="Bonuses that have associated visual images">
+              <input type="checkbox" className="mr-1" checked={includeVisualBonuses} onChange={e => setIncludeVisualBonuses(e.target.checked)} /> Visual bonuses
             </label>
           </div>
         </div>
@@ -1034,6 +1247,30 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
             <Play className="h-5 w-5" /> {scorekeeping ? 'Close' : 'Scorekeeper'}
           </button>
   </div>
+  {/* Session history paginator */}
+  {Array.isArray(history) && history.length > 0 && (
+    <div className="mt-3 flex items-center justify-center gap-3 text-sm">
+      <button
+        className="chip px-2 py-1 disabled:opacity-50"
+        onClick={() => loadHistoryAt((histPos ?? (history.length - 1)) - 1)}
+        disabled={(histPos ?? (history.length - 1)) <= 0}
+        aria-label="Previous generated round"
+      >
+        ◀ Prev
+      </button>
+      <div className="opacity-80">
+        Round {((histPos ?? (history.length - 1)) + 1)} of {history.length} (this session)
+      </div>
+      <button
+        className="chip px-2 py-1 disabled:opacity-50"
+        onClick={() => loadHistoryAt((histPos ?? (history.length - 1)) + 1)}
+        disabled={(histPos ?? (history.length - 1)) >= history.length - 1}
+        aria-label="Next generated round"
+      >
+        Next ▶
+      </button>
+    </div>
+  )}
   </div>
   </div>
 
@@ -1080,6 +1317,15 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
           interruptArmed={interruptArmed}
           setAwaitingPlayer={setAwaitingPlayer}
             setInterruptArmed={setInterruptArmed}
+            // Typed-answer props
+            typedAnswerActive={typedAnswerActive}
+            setTypedAnswerActive={setTypedAnswerActive}
+            typedAnswerText={typedAnswerText}
+            setTypedAnswerText={setTypedAnswerText}
+            typedAnswerPlayerId={typedAnswerPlayerId}
+            typedAnswerLoading={typedAnswerLoading}
+            typedAnswerReason={typedAnswerReason}
+            checkTypedAnswer={checkTypedAnswerWithLLM}
           isTossupFinal={isTossupFinal}
           recordNoAnswer={recordNoAnswer}
           throwOutAndReplace={throwOutAndReplace}

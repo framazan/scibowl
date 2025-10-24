@@ -1,89 +1,9 @@
 import { getFirestoreDb } from '../firebase';
-import { collection, addDoc, serverTimestamp, doc, getDoc, setDoc, updateDoc, deleteDoc, deleteField } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, doc, getDoc, setDoc, updateDoc, deleteDoc, deleteField, runTransaction, arrayRemove } from 'firebase/firestore';
 
 // Schema: users/{uid}/rounds/{autoId}
 // round document: {
 //   createdAt, title, filters, pairs: [{tossupId, bonusId}], tournaments: [], questionType, count
-// }
-
-// Minimal IndexedDB for user rounds (separate DB to avoid version conflicts)
-const ROUNDS_DB_NAME = 'scibowl-user-cache';
-const ROUNDS_DB_VERSION = 1;
-let roundsDbPromise = null;
-const STALE_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
-
-function openRoundsDb() {
-  if (roundsDbPromise) return roundsDbPromise;
-  roundsDbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(ROUNDS_DB_NAME, ROUNDS_DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains('roundsIndex')) db.createObjectStore('roundsIndex'); // key: uid -> entries object
-      if (!db.objectStoreNames.contains('roundDetails')) db.createObjectStore('roundDetails'); // key: `${uid}::${roundId}` -> detail
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  return roundsDbPromise;
-}
-
-async function idbGetIndex(uid) {
-  try {
-    const db = await openRoundsDb();
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction('roundsIndex', 'readonly');
-      const store = tx.objectStore('roundsIndex');
-      const req = store.get(uid);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
-    });
-  } catch {
-    return null;
-  }
-}
-async function idbSetIndex(uid, payload) {
-  try {
-    const db = await openRoundsDb();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction('roundsIndex', 'readwrite');
-      const store = tx.objectStore('roundsIndex');
-  const req = store.put(payload, uid);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
-  } catch {
-    // ignore cache failures
-  }
-}
-async function idbGetDetail(uid, roundId) {
-  try {
-    const db = await openRoundsDb();
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction('roundDetails', 'readonly');
-      const store = tx.objectStore('roundDetails');
-      const req = store.get(`${uid}::${roundId}`);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
-    });
-  } catch {
-    return null;
-  }
-}
-async function idbSetDetail(uid, roundId, detail) {
-  try {
-    const db = await openRoundsDb();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction('roundDetails', 'readwrite');
-      const store = tx.objectStore('roundDetails');
-  const req = store.put(detail, `${uid}::${roundId}`);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
-  } catch {
-    // ignore cache failures
-  }
-}
-async function idbDeleteDetail(uid, roundId) {
   try {
     const db = await openRoundsDb();
     await new Promise((resolve) => {
@@ -96,7 +16,6 @@ async function idbDeleteDetail(uid, roundId) {
   } catch {
     // ignore cache failures
   }
-}
 async function idbListDetailIds(uid) {
   try {
     const db = await openRoundsDb();
@@ -583,3 +502,4 @@ export async function renameUserRound(uid, roundId, newTitle) {
 
   return true;
 }
+

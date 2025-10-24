@@ -1,4 +1,5 @@
 import { initializeApp, getApps } from 'firebase/app';
+import { initializeAppCheck, ReCaptchaV3Provider, getToken as getAppCheckTokenInternal } from 'firebase/app-check';
 import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
@@ -23,14 +24,58 @@ export function getFirebaseApp() {
   return app;
 }
 
+
 export function getFirestoreDb() {
+  ensureAppCheck();
   return getFirestore(getFirebaseApp());
 }
 
+
 export function getFirebaseAuth() {
+  ensureAppCheck();
   return getAuth(getFirebaseApp());
 }
 
+
 export function getFirebaseStorage() {
+  ensureAppCheck();
   return getStorage(getFirebaseApp());
+}
+
+// Initialize Firebase App Check (ReCaptcha v3) once; token auto-refresh enabled
+let appCheckInstance = null;
+export function ensureAppCheck() {
+  try {
+    // Enable debug token for local development if env variable is set
+    if (import.meta.env.MODE === 'development' || window.FIREBASE_APPCHECK_DEBUG_TOKEN === 'true') {
+      self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    }
+    const app = getFirebaseApp();
+    if (!appCheckInstance) {
+      const siteKey = import.meta.env.VITE_RECAPTCHA_V3_SITE_KEY;
+      if (siteKey) {
+        appCheckInstance = initializeAppCheck(app, {
+          provider: new ReCaptchaV3Provider(siteKey),
+          isTokenAutoRefreshEnabled: true,
+        });
+      } else {
+        appCheckInstance = null;
+      }
+    }
+    return appCheckInstance;
+  } catch {
+    return null;
+  }
+}
+
+// Helper to retrieve an App Check token (or null if unavailable)
+export async function getAppCheckToken(forceRefresh = false) {
+  try {
+    const ac = ensureAppCheck();
+    if (!ac) return null;
+    const res = await getAppCheckTokenInternal(ac, forceRefresh);
+    return res?.token || null;
+  } catch {
+    return null;
+  }
 }

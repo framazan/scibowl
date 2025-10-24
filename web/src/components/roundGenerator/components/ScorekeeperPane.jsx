@@ -10,6 +10,15 @@ export default function ScorekeeperPane({
   interruptArmed,
   setAwaitingPlayer,
   setInterruptArmed,
+  // typed-answer props
+  typedAnswerActive,
+  setTypedAnswerActive,
+  typedAnswerText,
+  setTypedAnswerText,
+  typedAnswerPlayerId,
+  typedAnswerLoading,
+  typedAnswerReason,
+  checkTypedAnswer,
   isTossupFinal,
   recordNoAnswer,
   throwOutAndReplace,
@@ -90,6 +99,47 @@ export default function ScorekeeperPane({
                 title="Toggle interrupt (applies to next correct/incorrect)"
               >{interruptArmed ? 'Interrupt ON' : 'Interrupt'}</button>
             </div>
+            {/* Typed answer on interrupt: only for toss-ups with a tossup present */}
+            {interruptArmed && displayPairs[currentIndex]?.tossup && !isTossupFinal(currentIndex) && (
+              <div className="space-y-1 rounded-md border border-black/10 dark:border-white/10 p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[11px] font-medium">Typed answer (AI check)</div>
+                  <button
+                    type="button"
+                    className={`chip text-[11px] px-2 py-0.5 ${typedAnswerActive ? 'bg-purple-600 text-white' : ''}`}
+                    onClick={() => setTypedAnswerActive(v => !v)}
+                    title="Toggle typed answer entry for interrupts"
+                  >{typedAnswerActive ? 'Hide' : 'Type Answer'}</button>
+                </div>
+                {typedAnswerActive && (
+                  <div className="space-y-2">
+                    <div className="text-[10px] opacity-70">Select a player seat, then enter the answer as given and check with AI.</div>
+                    <input
+                      type="text"
+                      className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-darkcard px-2 py-1 text-xs"
+                      placeholder="Type the player’s answer…"
+                      value={typedAnswerText}
+                      onChange={e => setTypedAnswerText(e.target.value)}
+                      disabled={typedAnswerLoading}
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[10px]">
+                        Seat: {typedAnswerPlayerId ? 'selected' : '—'}
+                      </div>
+                      <button
+                        type="button"
+                        className="chip text-[11px] bg-tint text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={checkTypedAnswer}
+                        disabled={typedAnswerLoading || !typedAnswerPlayerId || !typedAnswerText.trim()}
+                      >{typedAnswerLoading ? 'Checking…' : 'Check with AI'}</button>
+                    </div>
+                    {typedAnswerReason && (
+                      <div className="text-[10px] opacity-80">AI: {typedAnswerReason}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <button
                 className="chip text-xs disabled:opacity-40 disabled:cursor-not-allowed"

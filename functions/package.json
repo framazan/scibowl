@@ -1,7 +1,7 @@
 {
   "name": "functions",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+  "build": "tsc -p tsconfig.json && rm -rf lib/prompts && mkdir -p lib/prompts && cp src/prompts/mc_check.tmpl lib/prompts/mc_check.tmpl && cp src/prompts/bonus_check.tmpl lib/prompts/bonus_check.tmpl",
     "serve": "npm run build && firebase emulators:start --only functions",
     "deploy": "firebase deploy --only functions",
     "lint": "eslint ."

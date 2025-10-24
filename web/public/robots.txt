@@ -3,9 +3,6 @@ User-agent: *
 # Practice mode available at /practice (early / evolving)
 # (Root / still served but instantly redirects client-side.)
 
-# Block internal API endpoints (served via Firebase rewrites)
-Disallow: /api/
-
 # Prevent indexing of auth page
 Disallow: /signin
 

@@ -6,6 +6,7 @@ export default function SearchBar({
   setSearchInput,
   committedSearch,
   setCommittedSearch,
+  hasGenerated = false,
 }) {
   return (
     <div>
@@ -27,15 +28,16 @@ export default function SearchBar({
             value={searchInput}
             onChange={e => setSearchInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') setCommittedSearch(searchInput); }}
-            placeholder="Find text in questions or answers..."
-            className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-black/10 bg-white dark:bg-darkcard text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            placeholder="Find text in generated round..."
+            className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-black/10 bg-white dark:bg-darkcard text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Search questions"
+            disabled={!hasGenerated}
           />
         </div>
         <button
           type="button"
-            className="btn btn-sm btn-primary whitespace-nowrap"
-          disabled={!searchInput.trim() || searchInput.trim() === committedSearch.trim()}
+            className="btn btn-sm btn-primary whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={!hasGenerated || !searchInput.trim() || searchInput.trim() === committedSearch.trim()}
           onClick={() => setCommittedSearch(searchInput)}
         >Search</button>
       </div>

@@ -10,6 +10,8 @@ import { useEffect } from 'react';
 import useAuth from './data/useAuth.js';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { RoundGeneratorSEO, PracticeSEO } from './components/SEO.jsx';
+import { useRoundSession } from './context/RoundSessionContext.jsx';
+import { determineDark, loadThemePreference, saveThemePreference, subscribeToSystemTheme } from './data/theme.js';
 // import AdSlot from './components/AdSlot.jsx'; // Uncomment when you have a real slot id
 
 function TabButton({ active, children, onClick }) {
@@ -30,9 +32,29 @@ export default function App() {
   const auth = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  // Persist generated round across tab switches (and to IndexedDB) via context
+  const { generatedPairs: persistedGenerated, setGeneratedPairs: setPersistedGenerated, pushGeneratedRound } = useRoundSession();
   // Derive tab from pathname
   const tab = location.pathname.startsWith('/practice') ? 'practice' : location.pathname.startsWith('/admin') ? 'admin' : 'generate';
-  const [dark, setDark] = useState(() => window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  // Theme preference: 'system' | 'light' | 'dark'
+  const [themePref, setThemePref] = useState('system');
+  const [dark, setDark] = useState(() => {
+    try { return document.documentElement.classList.contains('dark'); }
+    catch { return determineDark('system'); }
+  });
+  // Track if user explicitly changed theme; avoids persisting defaults on first load
+  const userChangedPrefRef = React.useRef(false);
+
+  // Load saved preference on mount; default to system otherwise
+  useEffect(() => {
+    let mounted = true;
+    loadThemePreference().then((pref) => {
+      if (!mounted) return;
+      setThemePref(pref);
+      setDark(determineDark(pref));
+    });
+    return () => { mounted = false; };
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
@@ -48,6 +70,24 @@ export default function App() {
     }
     meta.setAttribute('content', dark ? '#000000' : '#ffffff');
   }, [dark]);
+
+  // Persist preference whenever it changes
+  useEffect(() => {
+    if (userChangedPrefRef.current) {
+      saveThemePreference(themePref);
+    }
+  }, [themePref]);
+
+  // When following system, subscribe to system theme changes and reflect immediately
+  useEffect(() => {
+    if (themePref !== 'system') return; // only follow system when set to system
+    // Ensure initial sync to current system setting
+    setDark(determineDark('system'));
+    const unsubscribe = subscribeToSystemTheme((isDark) => {
+      setDark(!!isDark);
+    });
+    return () => unsubscribe && unsubscribe();
+  }, [themePref]);
 
   // Toggle bright red border around entire page in admin mode
   useEffect(() => {
@@ -123,10 +163,32 @@ export default function App() {
                     </button>
                   )}
             <div className="ml-4">
-              <MuiThemeSwitch
-                checked={dark}
-                onChange={setDark}
-              />
+              <div className="relative inline-flex items-center group">
+                {themePref !== 'system' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      userChangedPrefRef.current = true;
+                      setThemePref('system');
+                      setDark(determineDark('system'));
+                    }}
+                    className="mr-2 hidden group-hover:inline-flex items-center px-2 py-1 rounded text-xs border border-black/10 dark:border-white/20 bg-white/70 dark:bg-black/40 backdrop-blur-sm text-black dark:text-white hover:bg-white/90 dark:hover:bg-black/60 transition"
+                    aria-label="Follow system theme"
+                    title="Follow system"
+                  >
+                    Follow system
+                  </button>
+                )}
+                <MuiThemeSwitch
+                  checked={dark}
+                  onChange={(next) => {
+                    // Manual toggle = explicit user preference (stop following system)
+                    userChangedPrefRef.current = true;
+                    setThemePref(next ? 'dark' : 'light');
+                    setDark(next);
+                  }}
+                />
+              </div>
             </div>
             <div className="ml-3">
               {auth.loading ? (
@@ -159,7 +221,13 @@ export default function App() {
               ) : tab === 'admin' ? (
                 <Admin auth={auth} />
               ) : (
-                <RoundGenerator lazy={q} auth={auth} />
+                <RoundGenerator
+                  lazy={q}
+                  auth={auth}
+                  persistedGenerated={persistedGenerated}
+                  setPersistedGenerated={setPersistedGenerated}
+                  onNewRound={pushGeneratedRound}
+                />
               )}
             </Suspense>
           </div>

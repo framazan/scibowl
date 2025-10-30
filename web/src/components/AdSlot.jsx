@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-
+// ADSENSE IS NOT ACTIVE, POTENTIAL INTEGRATION IN 2026
 /**
  * AdSlot renders a Google AdSense ad unit. Make sure the global script is in index.html.
  * Props:

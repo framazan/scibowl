@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "firebase deploy --only hosting --project scibowl-analytics",
-    "update-rules": "firebase deploy --only firestore:rules --project scibowl-analytics"
+    "update-rules": "firebase deploy --only firestore:rules --project scibowl-analytics",
+    "update-rtdb-rules": "firebase deploy --only database --project scibowl-analytics"
   },
   "dependencies": {
     "@react-pdf/renderer": "^3.4.5",

@@ -1,4 +1,4 @@
-# Google AdSense Integration Notes
+# Google AdSense Integration Notes - NOT DEPLOYED, POTENTIAL INTEGRATION IN 2026
 
 Global script + meta tag added in `index.html`.
 

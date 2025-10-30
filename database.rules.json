@@ -1,0 +1,105 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "mp": {
+      "rooms": {
+        ".read": true,
+        ".indexOn": ["createdAt", "name"],
+        "$roomId": {
+          ".read": true,
+          ".write": true,
+          "state": { ".write": true },
+          "game": { ".write": true }
+        }
+      },
+      "roomHistory": {
+        "$roomId": {
+          ".read": true,
+          "$historyId": {
+            ".write": true,
+            "questionId": { ".validate": "newData.isString()" },
+            "at": { ".validate": "newData.isNumber()" }
+          }
+        }
+      },
+      "roomSettings": {
+        "$roomId": {
+          ".read": true,
+          ".write": true
+        }
+      },
+      "roomMembers": {
+        "$roomId": {
+          ".read": true,
+          "$uid": {
+            ".write": "root.child('mp/rooms/' + $roomId + '/isPrivate').val() == false || root.child('mp/rooms/' + $roomId + '/passHash').val() == null || newData.child('passHash').val() == root.child('mp/rooms/' + $roomId + '/passHash').val()",
+            "draft": { ".validate": "newData.val() == null || (newData.isString() && newData.val().length <= 200)" },
+            "typing": { ".validate": "newData.val() == true || newData.val() == false" },
+            "displayName": { ".validate": "newData.isString() && newData.val().length <= 100" },
+            "score": { ".write": true }
+          }
+        }
+      },
+      "roomAnswers": {
+        "$roomId": {
+          ".read": true,
+          "$questionId": {
+            "$uid": {
+              ".write": true,
+              "uid": { ".validate": "newData.isString()" },
+              "displayName": { ".validate": "newData.val() == null || (newData.isString() && newData.val().length <= 100)" },
+              "status": { ".validate": "newData.isString()" },
+              "text": { ".validate": "newData.val() == null || (newData.isString() && newData.val().length <= 500)" },
+              "choice": { ".validate": "newData.val() == null || (newData.isString() && newData.val().length <= 5)" },
+              "correct": { ".validate": "newData.val() == null || newData.isBoolean()" },
+              "points": { ".validate": "newData.val() == null || newData.isNumber()" },
+              "updatedAt": { ".validate": "newData.isNumber()" }
+            }
+          }
+        }
+      },
+      "roomMessages": {
+        "$roomId": {
+          ".indexOn": ["createdAt"],
+          ".read": true,
+          "$msgId": {
+            ".write": "newData.child('uid').isString() && newData.child('text').isString() && newData.child('text').val().length > 0 && newData.child('text').val().length <= 500",
+            "uid": { ".validate": "newData.isString()" },
+            "displayName": { ".validate": "newData.isString() && newData.val().length <= 100" },
+            "createdAt": { ".validate": "newData.isNumber()" }
+          }
+        }
+      },
+      "roomBuzzes": {
+        "$roomId": {
+          ".read": true,
+          "$questionId": {
+            "$buzzId": {
+              ".write": "(!data.exists() && newData.child('uid').isString() && newData.child('at').isNumber()) || (data.exists() && newData.child('uid').val() == data.child('uid').val())",
+              
+              "uid": { ".validate": "newData.isString()" },
+              "displayName": { ".validate": "newData.val() == null || (newData.isString() && newData.val().length <= 100)" },
+              "at": { ".validate": "newData.isNumber()" },
+              "interrupt": { ".validate": "newData.val() == null || newData.isBoolean()" },
+              
+              "status": { ".validate": "newData.val() == null || newData.isString()" },
+              "text": { ".validate": "newData.val() == null || (newData.isString() && newData.val().length <= 500)" },
+              "correct": { ".validate": "newData.val() == null || newData.isBoolean()" },
+              "points": { ".validate": "newData.val() == null || newData.isNumber()" },
+              "checkedAt": { ".validate": "newData.val() == null || newData.isNumber()" }
+            }
+          }
+        }
+      },
+      "userRooms": {
+        "$uid": {
+          ".read": "auth != null && auth.uid == $uid",
+          "$roomId": {
+            ".write": "auth != null && auth.uid == $uid"
+          }
+        }
+      }
+    }
+  }
+}

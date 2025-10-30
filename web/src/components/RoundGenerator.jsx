@@ -2,12 +2,13 @@ import React, { useMemo, useState, useRef } from 'react';
 import { idbGet } from '../data/idb.js';
 import { AlertTriangle, Plus, Minus, FileDown, CloudCheck, Trash2, ChevronRight, ChevronUp, ChevronDown, ArrowUp, List, RefreshCw, FolderPlus, Pencil, Maximize2, Play } from 'lucide-react';
 import LatexRenderer from './LatexRenderer.jsx';
-import { getRoundsIndex, getRoundDetail, saveUserRound, buildExcludeSetFromRound, renameUserRound, syncUserRoundsCache, deleteUserRound, setUserRoundFolder, getRoundFolders, addRoundFolder, renameRoundFolder, deleteRoundFolder } from '../data/rounds.firestore.js';
+import { getRoundsIndex, getRoundDetail, saveUserRound, buildExcludeSetFromRound, renameUserRound, syncUserRoundsCache, deleteUserRound, setUserRoundFolder, getRoundFolders, addRoundFolder, renameRoundFolder, deleteRoundFolder, claimSharedPresetRound } from '../data/rounds.firestore.js';
 import { unique, findBonus, parseMCChoices, categoryToCode, loadHtml2Pdf } from './roundGenerator/utils/helpers.js';
 import { isVisualBonus } from '../data/visualBonuses.js';
 import TournamentSelector from './roundGenerator/components/TournamentSelector.jsx';
 import RoundRanges from './roundGenerator/components/RoundRanges.jsx';
 import SavedRoundsPanel from './roundGenerator/components/SavedRoundsPanel.jsx';
+import CategoriesSelector from './roundGenerator/components/CategoriesSelector.jsx';
 import { useFilters } from './roundGenerator/hooks/useFilters.js';
 import { useUserRounds } from './roundGenerator/hooks/useUserRounds.js';
 // react-pdf for scoresheet generation (round PDF of questions still uses existing html2pdf for now)
@@ -20,6 +21,7 @@ import ScorekeeperPane from './roundGenerator/components/ScorekeeperPane.jsx';
 import SubstitutionModal from './roundGenerator/components/SubstitutionModal.jsx'; // New modal for structured player substitutions
 import { checkAnswerMC as apiCheckMC, checkAnswerBonus as apiCheckBonus } from '../api/client.js';
 import { useRoundSession } from '../context/RoundSessionContext.jsx';
+import CollapsiblePinButton from './roundGenerator/components/CollapsiblePinButton.jsx';
 
 export default function RoundGenerator({ questions = [], lazy = null, auth = null, persistedGenerated = null, setPersistedGenerated = null, onNewRound = null }) {
   // Filters, tournaments, rounds, and ranges
@@ -640,8 +642,9 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
   function computePairs() {
     // Build exclusion set from selected rounds
     const excludeSet = new Set();
-    // ensure details are present (lazy fetch)
-    const needed = selectedExcludeRoundIds.filter(id => !excludeDetailCache.current.has(id));
+  // ensure details are present (lazy fetch)
+  const needed = selectedExcludeRoundIds.filter(id => !excludeDetailCache.current.has(id));
+
     // Note: computePairs can be sync; we won't fetch here to avoid async. Exclusion for newly selected ids will apply on next generate after fetch.
     for (const id of selectedExcludeRoundIds) {
       const detail = excludeDetailCache.current.get(id);
@@ -888,7 +891,116 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
       count,
       questionType,
     });
-    // ...existing code...
+    // 1) Try to claim up to two preset rounds and combine them to satisfy filters/count
+    try {
+      const desired = Math.max(1, Number(count) || 1);
+
+      async function claimAndMaterializeOnce() {
+        const claim = await claimSharedPresetRound({ questionType, categories: selectedCategories, count: desired }).catch(() => ({ roundId: null }));
+        const claimedId = claim?.roundId || null;
+        if (!claimedId) return { pairs: [], tournaments: [] };
+        const presetPairs = Array.isArray(claim.pairs) ? claim.pairs : [];
+        if (presetPairs.length === 0) return { pairs: [], tournaments: [] };
+
+        // Ensure tournaments referenced by the preset are loaded
+        const tset = new Set();
+        for (const p of presetPairs) {
+          const t1 = p?.tossupMeta?.tournament; if (t1) tset.add(t1);
+          const t2 = p?.bonusMeta?.tournament; if (t2) tset.add(t2);
+        }
+        const tlist = Array.from(tset);
+        try { if (isLazy && tlist.length) { await lazy.ensureLoaded(tlist); } } catch {}
+
+        // Build lookup for those tournaments (independent of current selection)
+        const sourceQs = isLazy ? lazy.getLoadedQuestions(tlist) : validQuestions;
+        const byId = new Map(sourceQs.map(q => [q.id, q]));
+
+        // Convert into real questions, then apply filters (ignore tournaments/ranges for presets)
+        const categorySet = new Set(selectedCategories);
+        const keepQ = (q) => {
+          if (!q) return false;
+          if (selectedCategories.length && !categorySet.has(q.category)) return false;
+          return true;
+        };
+
+        let materialized = presetPairs.map(p => ({
+          tossup: p.tossupId ? (byId.get(p.tossupId) || null) : null,
+          bonus: p.bonusId ? (byId.get(p.bonusId) || null) : null,
+        }));
+
+        if (questionType === 'tossup') {
+          materialized = materialized
+            .map(pair => pair.tossup ? { tossup: pair.tossup, bonus: null } : null)
+            .filter(Boolean)
+            .filter(p => keepQ(p.tossup));
+        } else if (questionType === 'bonus') {
+          materialized = materialized
+            .map(pair => pair.bonus ? { tossup: null, bonus: pair.bonus } : null)
+            .filter(Boolean)
+            .filter(p => keepQ(p.bonus))
+            // Exclude visuals in bonus-only mode unless explicitly allowed
+            .filter(p => allowVisualInBonusOnly ? true : !isVisualBonus(p.bonus));
+        } else {
+          materialized = materialized
+            .map(pair => {
+              const tuOk = keepQ(pair.tossup);
+              const boOkCat = pair.bonus ? keepQ(pair.bonus) : true; // category check
+              const boOk = pair.bonus ? (boOkCat && (allowVisualInPairs || !isVisualBonus(pair.bonus))) : true; // allow missing or filter visuals depending on flag
+              if (!tuOk) return null;
+              return { tossup: pair.tossup, bonus: boOk ? pair.bonus : null };
+            })
+            .filter(Boolean);
+        }
+
+        return { pairs: materialized, tournaments: tlist };
+      }
+
+      const combined = [];
+      const seen = new Set(); // dedupe by relevant question id(s)
+      const pushDedup = (pair) => {
+        let key = '';
+        if (questionType === 'tossup') key = pair.tossup?.id ? `tu:${pair.tossup.id}` : '';
+        else if (questionType === 'bonus') key = pair.bonus?.id ? `bo:${pair.bonus.id}` : '';
+        else key = pair.tossup?.id ? `tu:${pair.tossup.id}` : (pair.bonus?.id ? `bo:${pair.bonus.id}` : '');
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        combined.push(pair);
+      };
+
+      // First claim
+      const c1 = await claimAndMaterializeOnce();
+      c1.pairs.forEach(pushDedup);
+      if (combined.length >= desired) {
+        const nextPairs = combined.slice(0, desired);
+        if (typeof onNewRound === 'function') onNewRound(nextPairs); else setGenerated(nextPairs);
+        setHasUnsavedRound(true);
+        console.groupEnd();
+        return;
+      }
+
+      // If not enough, try second claim
+      if (combined.length < desired) {
+        const c2 = await claimAndMaterializeOnce();
+        c2.pairs.forEach(pushDedup);
+      }
+
+      if (combined.length >= desired) {
+        const nextPairs = combined.slice(0, desired);
+        if (typeof onNewRound === 'function') onNewRound(nextPairs); else setGenerated(nextPairs);
+        setHasUnsavedRound(true);
+        console.groupEnd();
+        return;
+      }
+
+      // If still not enough after two presets, fall through to normal generation
+      if (combined.length > 0) {
+        pushToast('Not enough preset questions matched filters; using normal generator.', 'info', 5000);
+      }
+    } catch (e) {
+      console.warn('Preset round claim/materialization failed; falling back.', e);
+    }
+
+    // 2) Fallback to normal generation
   const pairs = computePairs();
   if (typeof onNewRound === 'function') onNewRound(pairs); else setGenerated(pairs);
     if (pairs.length === 0) {
@@ -1089,34 +1201,99 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLazy, lazy, validQuestions]);
 
+  // Add left pane collapse + resizable state
+  const [leftPaneCollapsed, setLeftPaneCollapsed] = useState(false);
+  const [leftPaneHovered, setLeftPaneHovered] = useState(false);
+  const [leftPanePinned, setLeftPanePinned] = useState(true);
+  const [leftPaneWidth, setLeftPaneWidth] = useState(() => {
+    try {
+      const v = localStorage.getItem('sb_leftPaneWidth_rounds');
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 220 && n <= 720 ? n : 320;
+    } catch { return 320; }
+  });
+  const resizingRef = React.useRef(false);
+  const startXRef = React.useRef(0);
+  const startWRef = React.useRef(320);
+  React.useEffect(() => {
+    function onMove(e) {
+      if (!resizingRef.current) return;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const dx = clientX - startXRef.current;
+      let next = Math.round(startWRef.current + dx);
+      next = Math.max(220, Math.min(720, next));
+      setLeftPaneWidth(next);
+    }
+    function onUp() {
+      if (!resizingRef.current) return;
+      resizingRef.current = false;
+      try { localStorage.setItem('sb_leftPaneWidth', String(leftPaneWidth)); } catch {}
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+    };
+  }, [leftPaneWidth]);
+
   return (
     <div
-  className={`grid gap-6 md:grid-cols-3 max-w-[100vw] w-full overflow-x-hidden ${scorekeeping ? 'transition-all' : ''}`}
-  style={scorekeeping ? { paddingRight: 420 } : undefined}
+      className={`grid gap-6 max-w-[100vw] w-full overflow-x-hidden ${scorekeeping ? 'transition-all' : ''} md:[grid-template-columns:var(--left-pane-w)_minmax(0,1fr)]`}
+      style={{
+        ...(scorekeeping ? { paddingRight: 420 } : {}),
+        ['--left-pane-w']: (leftPaneCollapsed && !leftPaneHovered) ? '25px' : `${leftPaneWidth}px`,
+      }}
     >
-      <div className={`md:self-start ${scorekeeping ? 'hidden' : ''}`}>
-  <div className="glass p-6 space-y-6 overflow-x-hidden min-w-0">
-        <SearchBar
-          searchInput={searchInput}
-          setSearchInput={setSearchInput}
-          committedSearch={committedSearch}
-          setCommittedSearch={setCommittedSearch}
-          hasGenerated={generated.length > 0}
+      <div className={`md:self-start ${scorekeeping ? 'hidden' : ''} relative`}>
+        {/* Invisible hover area for collapsed pane */}
+        {leftPaneCollapsed && (
+          <div
+            className="absolute inset-0 z-5"
+            onMouseEnter={() => setLeftPaneHovered(true)}
+            onMouseLeave={() => setLeftPaneHovered(false)}
+          />
+        )}
+        <CollapsiblePinButton
+          leftPaneCollapsed={leftPaneCollapsed}
+          leftPanePinned={leftPanePinned}
+          leftPaneHovered={leftPaneHovered}
+          setLeftPaneCollapsed={setLeftPaneCollapsed}
+          setLeftPanePinned={setLeftPanePinned}
+          setLeftPaneHovered={setLeftPaneHovered}
         />
-        <div>
-          <div className="font-semibold mb-2">Question Types</div>
-          <div className="flex gap-2 flex-wrap">
-            <label className={`chip cursor-pointer ${includeTossups ? 'ring-1 ring-tint bg-tint/10' : ''}`}>
-              <input type="checkbox" className="mr-1" checked={includeTossups} onChange={e => setIncludeTossups(e.target.checked)} /> Toss-ups
-            </label>
-            <label className={`chip cursor-pointer ${includeBonuses ? 'ring-1 ring-tint bg-tint/10' : ''}`}>
-              <input type="checkbox" className="mr-1" checked={includeBonuses} onChange={e => setIncludeBonuses(e.target.checked)} /> Bonuses
-            </label>
-            <label className={`chip cursor-pointer ${includeVisualBonuses ? 'ring-1 ring-tint bg-tint/10' : ''}`} title="Bonuses that have associated visual images">
-              <input type="checkbox" className="mr-1" checked={includeVisualBonuses} onChange={e => setIncludeVisualBonuses(e.target.checked)} /> Visual bonuses
-            </label>
+        <div
+          className={`glass p-6 space-y-6 min-w-0 transition-all duration-300 ${leftPaneCollapsed && !leftPaneHovered ? 'opacity-0 pointer-events-none scale-95' : 'opacity-100 scale-100'}`}
+          onMouseEnter={() => setLeftPaneHovered(true)}
+          onMouseLeave={() => setLeftPaneHovered(false)}
+        >
+          <SearchBar
+            searchInput={searchInput}
+            setSearchInput={setSearchInput}
+            committedSearch={committedSearch}
+            setCommittedSearch={setCommittedSearch}
+            hasGenerated={generated.length > 0}
+          />
+          <div>
+            <div className="font-semibold mb-2">Question Types</div>
+            <div className="flex gap-2 flex-wrap">
+              <label className={`chip cursor-pointer ${includeTossups ? 'ring-1 ring-tint bg-tint/10' : ''}`}>
+                <input type="checkbox" className="mr-1" checked={includeTossups} onChange={e => setIncludeTossups(e.target.checked)} /> Toss-ups
+              </label>
+              <label className={`chip cursor-pointer ${includeBonuses ? 'ring-1 ring-tint bg-tint/10' : ''}`}>
+                <input type="checkbox" className="mr-1" checked={includeBonuses} onChange={e => setIncludeBonuses(e.target.checked)} /> Bonuses
+              </label>
+              <label className={`chip cursor-pointer ${includeVisualBonuses ? 'ring-1 ring-tint bg-tint/10' : ''}`} title="Bonuses that have associated visual images">
+                <input type="checkbox" className="mr-1" checked={includeVisualBonuses} onChange={e => setIncludeVisualBonuses(e.target.checked)} /> Visual bonuses
+              </label>
+            </div>
           </div>
-        </div>
   {selectedTournaments.length === 0 && (
           <div role="alert" aria-live="polite" className="flex items-start gap-2 rounded-lg border-l-4 border-amber-500 bg-amber-50 text-amber-900 dark:border-amber-400 dark:bg-amber-900/20 dark:text-amber-100 px-3 py-2">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -1158,32 +1335,11 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
             onViewRound={openSavedRound}
           />
         )}
-        <div>
-          <div className="font-semibold mb-2 flex items-center gap-2">Categories
-            <button className="chip px-2 py-0.5 text-xs" onClick={() => setSelectedCategories([])}>Clear</button>
-            <button className="chip px-2 py-0.5 text-xs" onClick={() => setSelectedCategories(categories)}>Select All</button>
-            <button className="chip px-2 py-0.5 text-xs" onClick={() => {
-              const setAll = new Set(categories);
-              setSelectedCategories(prev => categories.filter(c => !prev.includes(c)));
-            }}>Invert</button>
-          </div>
-          <div className="flex flex-wrap gap-2 min-w-0">
-            {categories.map((c) => {
-              const active = selectedCategories.includes(c);
-              return (
-                <label key={c} className={`chip cursor-pointer ${active ? 'ring-1 ring-tint bg-tint/10' : ''}`} title={c}>
-                  <input
-                    type="checkbox"
-                    className="mr-1"
-                    checked={active}
-                    onChange={() => setSelectedCategories(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])}
-                  />
-                  <span className="truncate max-w-[12rem] inline-block align-middle">{c}</span>
-                </label>
-              );
-            })}
-          </div>
-        </div>
+        <CategoriesSelector
+          categories={categories}
+          selectedCategories={selectedCategories}
+          setSelectedCategories={setSelectedCategories}
+        />
         <RoundRanges
           selectedTournaments={selectedTournaments}
           tournaments={tournaments}
@@ -1206,18 +1362,18 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
       Generate
     </button>
     {auth?.user ? (
-      <button className="btn btn-outline-fancy flex items-center gap-2 hover-lift disabled:opacity-50 disabled:cursor-not-allowed" onClick={onSaveRound} disabled={saving || generated.length===0} style={{ minWidth: 140 }}>
+      <button className="btn btn-fancy flex items-center gap-2 hover-lift disabled:opacity-50 disabled:cursor-not-allowed" onClick={onSaveRound} disabled={saving || generated.length===0} style={{ minWidth: 140 }}>
         <CloudCheck className="h-5 w-5" />
         {saving ? 'Saving…' : 'Save Round'}
       </button>
     ) : (
-      <button className="btn btn-outline-fancy flex items-center gap-2 hover-lift disabled:opacity-50 disabled:cursor-not-allowed" onClick={() => window.alert?.('Log in to save rounds.')} disabled={generated.length===0} style={{ minWidth: 140 }}>
+      <button className="btn btn-fancy flex items-center gap-2 hover-lift disabled:opacity-50 disabled:cursor-not-allowed" onClick={() => window.alert?.('Log in to save rounds.')} disabled={generated.length===0} style={{ minWidth: 140 }}>
         <CloudCheck className="h-5 w-5" />
         Save Round
       </button>
     )}
           <button
-            className="btn btn-ghost btn-sm hover-lift disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn btn-fancy hover-lift disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={pdfLoading}
             onClick={exportPdf}
             title="Generate and export as PDF"
@@ -1272,9 +1428,36 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
     </div>
   )}
   </div>
-  </div>
-
-  <div className={`${scorekeeping ? 'md:col-span-3' : 'md:col-span-2'} space-y-4 min-w-0 overflow-x-hidden`}>
+        {/* Drag handle (shown when pane visible on md+) */}
+        {!leftPaneCollapsed && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            title="Drag to resize"
+            onMouseDown={(e) => {
+              if (leftPaneCollapsed) return;
+              resizingRef.current = true;
+              startXRef.current = e.clientX;
+              startWRef.current = leftPaneWidth;
+              document.body.style.cursor = 'col-resize';
+              document.body.style.userSelect = 'none';
+            }}
+            onTouchStart={(e) => {
+              if (leftPaneCollapsed) return;
+              const t = e.touches?.[0];
+              if (!t) return;
+              resizingRef.current = true;
+              startXRef.current = t.clientX;
+              startWRef.current = leftPaneWidth;
+              document.body.style.cursor = 'col-resize';
+              document.body.style.userSelect = 'none';
+            }}
+            className={`hidden md:block absolute top-0 -right-5 h-full w-2 cursor-col-resize z-30 transition-colors`}
+          >
+            <div className="absolute inset-y-0 left-[-1px] right-[-1px] w-[1px] bg-gray-400 dark:bg-gray-500" />
+          </div>
+        )}
+  </div>  <div className={`${scorekeeping ? 'md:col-span-2' : ''} md:self-start space-y-4 min-w-0 overflow-x-hidden`}>
         {(() => {
           // Derive display pairs: search results OR generated pairs
           return null;})()}

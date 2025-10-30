@@ -1,5 +1,5 @@
 import React from 'react';
-import { RefreshCw, FolderPlus, Pencil, Trash2, ChevronRight, ChevronDown, Eye } from 'lucide-react';
+import { RefreshCw, FolderPlus, Pencil, Trash2, ChevronRight, ChevronDown, Eye, ListX } from 'lucide-react';
 import { addRoundFolder, renameRoundFolder, deleteRoundFolder, setUserRoundFolder, renameUserRound } from '../../../data/rounds.firestore.js';
 
 export default function SavedRoundsPanel({
@@ -26,7 +26,9 @@ export default function SavedRoundsPanel({
   return (
     <div>
       <div className="font-semibold mb-2 flex items-center gap-2">Exclude rounds
-        <button className="chip px-2 py-0.5 text-xs" onClick={() => setSelectedExcludeRoundIds([])}>Clear</button>
+        <button className="chip px-2 py-0.5 text-xs" title="Clear selection" onClick={() => setSelectedExcludeRoundIds([])}>
+          <ListX size={16} />
+        </button>
         <button className="chip px-2 py-0.5 text-xs inline-flex items-center" aria-label="Refresh rounds & folders" title="Refresh" onClick={refresh}>
           <RefreshCw size={14} />
         </button>

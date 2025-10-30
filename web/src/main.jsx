@@ -2,6 +2,12 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import './index.css';
 import App from './App.jsx';
+import BuzzerLanding from './components/buzzer/BuzzerLanding.jsx';
+import BuzzRoom from './components/buzzer/BuzzRoom.jsx';
+import RoundGeneratorWrapper from './components/buzzer/RoundGeneratorWrapper.jsx';
+import RoundControl from './components/buzzer/RoundControl.jsx';
+import MultiplayerLanding from './components/multiplayer/MultiplayerLanding.jsx';
+import MultiplayerRoom from './components/multiplayer/Room.jsx';
 import { RoundSessionProvider } from './context/RoundSessionContext.jsx';
 import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom';
 import { HelmetProvider } from 'react-helmet-async';
@@ -18,6 +24,14 @@ const router = createBrowserRouter([
   { path: '/practice', element: <App /> },
   { path: '/admin', element: <App /> },
   { path: '/signin', element: <SignIn /> },
+  // Buzzer system
+  { path: '/buzzer', element: <BuzzerLanding /> },
+  { path: '/buzzer/:code', element: <BuzzRoom /> },
+  { path: '/buzzer/:code/generate', element: <RoundGeneratorWrapper /> },
+  { path: '/buzzer/:code/round', element: <RoundControl /> },
+  // Multiplayer
+  { path: '/multiplayer', element: <MultiplayerLanding /> },
+  { path: '/multiplayer/:roomId', element: <MultiplayerRoom /> },
 ]);
 
 createRoot(document.getElementById('root')).render(

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronUp, ChevronDown, Maximize2, List } from 'lucide-react';
+import { ChevronUp, ChevronDown, Maximize2, List, ListX, CheckSquare } from 'lucide-react';
 import isMsTournament from '../utils/isMsTournament.js';
 
 export default function TournamentSelector({
@@ -18,13 +18,19 @@ export default function TournamentSelector({
   return (
     <div>
       <div className="font-semibold mb-2 flex items-center flex-wrap gap-2">Tournaments
-        <button className="chip px-2 py-0.5 text-xs" title="Clear selection" onClick={() => setSelectedTournaments([])}>Clear</button>
+        <button
+          className="chip px-2 py-0.5 text-xs"
+          title="Clear selection"
+          onClick={() => setSelectedTournaments([])}
+        >
+          <ListX size={16} />
+        </button>
         <button
           className="chip px-2 py-0.5 text-xs"
           title="Select all"
           onClick={() => setSelectedTournaments((tournaments || []).filter(t => !isMsTournament(t)))}
         >
-          Select All
+          <CheckSquare size={16} />
         </button>
         <button
           className="chip px-2 py-0.5 text-xs inline-flex items-center gap-1"
@@ -173,13 +179,19 @@ export default function TournamentSelector({
               <button className="btn btn-ghost btn-sm" onClick={() => setShowTournamentModal(false)}>Close</button>
             </div>
             <div className="flex items-center flex-wrap gap-2">
-              <button className="chip px-2 py-0.5 text-xs" title="Clear selection" onClick={() => setSelectedTournaments([])}>Clear</button>
+              <button
+                className="chip px-2 py-0.5 text-xs"
+                title="Clear selection"
+                onClick={() => setSelectedTournaments([])}
+              >
+                <ListX size={16} />
+              </button>
               <button
                 className="chip px-2 py-0.5 text-xs"
                 title="Select all"
                 onClick={() => setSelectedTournaments((tournaments || []).filter(t => !isMsTournament(t)))}
               >
-                Select All
+                <CheckSquare size={16} />
               </button>
               <button
                 className="chip px-2 py-0.5 text-xs inline-flex items-center gap-1"

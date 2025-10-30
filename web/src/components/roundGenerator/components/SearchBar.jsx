@@ -36,7 +36,7 @@ export default function SearchBar({
         </div>
         <button
           type="button"
-            className="btn btn-sm btn-primary whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn btn-fancy whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={!hasGenerated || !searchInput.trim() || searchInput.trim() === committedSearch.trim()}
           onClick={() => setCommittedSearch(searchInput)}
         >Search</button>

@@ -6,9 +6,10 @@ import { sendPasswordResetEmail } from 'firebase/auth';
 import { Link } from 'react-router-dom';
 import { Home } from 'lucide-react';
 import MuiThemeSwitch from './MuiThemeSwitch.jsx';
+import { determineDark, loadThemePreference, saveThemePreference, subscribeToSystemTheme } from '../data/theme.js';
 
 // Stable shell wrapper component (defined at module scope to avoid remounting on each render)
-function Shell({ children, dark, setDark }) {
+function Shell({ children, dark, setDark, themePref, setThemePref, userChangedPrefRef }) {
   return (
     <div className="min-h-screen app-radial-bg dark:app-radial-bg transition-colors glass-backdrop text-black dark:text-white flex flex-col items-center px-4 py-10">
       <div className="w-full max-w-md flex items-center justify-between mb-4 gap-2">
@@ -17,10 +18,32 @@ function Shell({ children, dark, setDark }) {
           <Home size={14} aria-hidden="true" />
           <span>Home</span>
         </Link>
-        <MuiThemeSwitch
-          checked={dark}
-          onChange={setDark}
-        />
+        <div className="relative inline-flex items-center group">
+          {themePref !== 'system' && (
+            <button
+              type="button"
+              onClick={() => {
+                userChangedPrefRef.current = true;
+                setThemePref('system');
+                setDark(determineDark('system'));
+              }}
+              className="mr-2 hidden group-hover:inline-flex items-center px-2 py-1 rounded text-xs border border-black/10 dark:border-white/20 bg-white/70 dark:bg-black/40 backdrop-blur-sm text-black dark:text-white hover:bg-white/90 dark:hover:bg-black/60 transition"
+              aria-label="Follow system theme"
+              title="Follow system"
+            >
+              Follow system
+            </button>
+          )}
+          <MuiThemeSwitch
+            checked={dark}
+            onChange={(next) => {
+              // Manual toggle = explicit user preference (stop following system)
+              userChangedPrefRef.current = true;
+              setThemePref(next ? 'dark' : 'light');
+              setDark(next);
+            }}
+          />
+        </div>
       </div>
       {children}
     </div>
@@ -35,8 +58,26 @@ export default function SignIn() {
   const [error, setError] = React.useState('');
   const [resetMode, setResetMode] = React.useState(false);
   const [resetMsg, setResetMsg] = React.useState('');
-  // Local dark mode handling so visiting /signin directly respects prefers-color-scheme
-  const [dark, setDark] = React.useState(() => window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  // Theme preference: 'system' | 'light' | 'dark'
+  const [themePref, setThemePref] = React.useState('system');
+  const [dark, setDark] = React.useState(() => {
+    try { return document.documentElement.classList.contains('dark'); }
+    catch { return determineDark('system'); }
+  });
+  // Track if user explicitly changed theme; avoids persisting defaults on first load
+  const userChangedPrefRef = React.useRef(false);
+
+  // Load saved preference on mount; default to system otherwise
+  React.useEffect(() => {
+    let mounted = true;
+    loadThemePreference().then((pref) => {
+      if (!mounted) return;
+      setThemePref(pref);
+      setDark(determineDark(pref));
+    });
+    return () => { mounted = false; };
+  }, []);
+
   React.useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
     if (dark) {
@@ -52,6 +93,24 @@ export default function SignIn() {
     }
     meta.setAttribute('content', dark ? '#000000' : '#ffffff');
   }, [dark]);
+
+  // Persist preference whenever it changes
+  React.useEffect(() => {
+    if (userChangedPrefRef.current) {
+      saveThemePreference(themePref);
+    }
+  }, [themePref]);
+
+  // When following system, subscribe to system theme changes and reflect immediately
+  React.useEffect(() => {
+    if (themePref !== 'system') return; // only follow system when set to system
+    // Ensure initial sync to current system setting
+    setDark(determineDark('system'));
+    const unsubscribe = subscribeToSystemTheme((isDark) => {
+      setDark(!!isDark);
+    });
+    return () => unsubscribe && unsubscribe();
+  }, [themePref]);
 
   const validEmail = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
   const validPassword = password.length >= 10;
@@ -121,7 +180,7 @@ export default function SignIn() {
 
   if (auth.user) {
     return (
-      <Shell dark={dark} setDark={setDark}>
+      <Shell dark={dark} setDark={setDark} themePref={themePref} setThemePref={setThemePref} userChangedPrefRef={userChangedPrefRef}>
       <div className="mx-auto w-full max-w-md p-6 glass space-y-4">
         <div className="mb-3">You’re signed in as <strong>{auth.user.email || auth.user.displayName}</strong>.</div>
         <div className="flex gap-2">
@@ -136,7 +195,7 @@ export default function SignIn() {
   // Password reset mode
   if (resetMode) {
     return (
-      <Shell dark={dark} setDark={setDark}>
+      <Shell dark={dark} setDark={setDark} themePref={themePref} setThemePref={setThemePref} userChangedPrefRef={userChangedPrefRef}>
       <div className="mx-auto w-full max-w-md p-6 glass space-y-4 flex flex-col items-center">
         <h1 className="text-xl font-semibold gradient-text">Reset password</h1>
         {resetMsg && (
@@ -194,7 +253,7 @@ export default function SignIn() {
   }
 
   return (
-  <Shell dark={dark} setDark={setDark}>
+  <Shell dark={dark} setDark={setDark} themePref={themePref} setThemePref={setThemePref} userChangedPrefRef={userChangedPrefRef}>
     <div className="mx-auto w-full max-w-md p-6 glass mt-0 space-y-4 flex flex-col items-center">
     <SignInSEO />
       <h1 className="text-xl font-semibold gradient-text">Sign in</h1>

@@ -249,6 +249,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
   // Bonus answer check
   async function checkBonus() {
     if (!bonusState) return;
+    setChecking(true);
     try {
       const bonusChoices = parseMCChoicesRG(bonusState.bonus);
       let data;
@@ -265,6 +266,8 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
       setBonusState(bs => ({ ...bs, result: data }));
     } catch (e) {
       setBonusState(bs => ({ ...bs, result: { correct: false, reason: 'Check failed' } }));
+    } finally {
+      setChecking(false);
     }
   }
 
@@ -656,10 +659,12 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
           check();
         }
       }
-      // n for next question
+      // n for next question (blocked while checking)
       if ((key === 'n' || key === 'N') && !isTypingInInput(target)) {
         e.preventDefault();
-        nextQuestion();
+        if (!checking) {
+          nextQuestion();
+        }
       }
       // a to toggle show answer
       if ((key === 'a' || key === 'A') && !isTypingInInput(target)) {
@@ -720,6 +725,8 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
   function nextQuestion() {
     const pred = preferredType ? (q => q.question_type?.toLowerCase() === preferredType) : (() => true);
     const next = pickRandom(pool, pred);
+    // Prevent jumping while answer checking is in progress
+    if (checking) return;
     setCurrent(next);
   }
 
@@ -866,7 +873,12 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
           <button className="btn btn-ghost px-3 py-1.5 text-base" onClick={() => setShowAnswer(s => !s)} title={showAnswer ? 'Hide answer' : 'Reveal answer'}>
             {showAnswer ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
-          <button className="btn btn-ghost px-3 py-1.5 text-base" onClick={nextQuestion} title="Next question">
+          <button
+            className="btn btn-ghost px-3 py-1.5 text-base"
+            onClick={nextQuestion}
+            disabled={checking}
+            title={checking ? 'Please wait—checking in progress' : 'Next question'}
+          >
             <SkipForward size={16} />
           </button>
         </div>

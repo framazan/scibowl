@@ -14,6 +14,8 @@ export default function BuzzList({
   onSubmit,
   onUpdateTyping,
   mcInputRef,
+  answerWindowUid,
+  answerWindowRemainingMs,
 }) {
   if (!currentQId || !Array.isArray(buzzes) || buzzes.length === 0) return null;
   return (
@@ -26,6 +28,8 @@ export default function BuzzList({
         const isSelf = selfUid === bz.uid;
         const showDraft = typingMap?.[bz.uid]?.draft || members.find(m=>m.uid===bz.uid)?.draft || '';
         const name = bz.displayName || members.find(m=>m.uid===bz.uid)?.displayName || bz.uid;
+        const showAnswerTimer = isActive && !locked && answerWindowUid === bz.uid;
+        const secondsLeft = showAnswerTimer && Number.isFinite(answerWindowRemainingMs) ? Math.ceil(Math.max(0, answerWindowRemainingMs)/1000) : null;
         return (
           <div key={bz.id || `${bz.uid}-${ridx}`} className="rounded-lg bg-black/5 dark:bg-white/10 p-3">
             <div className="flex items-center gap-2 flex-wrap">
@@ -36,18 +40,28 @@ export default function BuzzList({
                 <span className="ml-2 px-2 py-1 rounded bg-black/10 dark:bg-white/10 text-sm whitespace-pre-wrap break-words">{ansRec?.text || ''}</span>
               ) : isActive ? (
                 isSelf ? (
-                  <form onSubmit={onSubmit} className="flex-1 min-w-[200px]">
-                    <input
-                      className="rounded-lg border border-black/10 dark:border-white/10 px-3 py-1.5 bg-white dark:bg-darkcard w-full"
-                      placeholder="Type your answer and press Enter"
-                      value={mcTypedAnswer}
-                      onChange={e=>{ setMcTypedAnswer(e.target.value); onUpdateTyping(!!e.target.value, String(e.target.value).slice(0,200)); }}
-                      ref={mcInputRef}
-                      autoFocus
-                    />
-                  </form>
+                  <div className="flex items-center gap-2 flex-1 min-w-[240px]">
+                    <form onSubmit={onSubmit} className="flex-1">
+                      <input
+                        className="rounded-lg border border-black/10 dark:border-white/10 px-3 py-1.5 bg-white dark:bg-darkcard w-full"
+                        placeholder="Type your answer and press Enter"
+                        value={mcTypedAnswer}
+                        onChange={e=>{ setMcTypedAnswer(e.target.value); onUpdateTyping(!!e.target.value, String(e.target.value).slice(0,200)); }}
+                        ref={mcInputRef}
+                        autoFocus
+                      />
+                    </form>
+                    {showAnswerTimer && (
+                      <span className="inline-flex items-center px-2 py-1 rounded bg-black/10 dark:bg-white/10 text-[11px] font-semibold">{secondsLeft}s</span>
+                    )}
+                  </div>
                 ) : (
-                  <span className="ml-2 text-sm text-black/80 dark:text-white/80 whitespace-pre-wrap break-words">{showDraft}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="ml-2 text-sm text-black/80 dark:text-white/80 whitespace-pre-wrap break-words">{showDraft}</span>
+                    {showAnswerTimer && (
+                      <span className="inline-flex items-center px-2 py-1 rounded bg-black/10 dark:bg-white/10 text-[11px] font-semibold">{secondsLeft}s</span>
+                    )}
+                  </div>
                 )
               ) : null}
               {locked && (

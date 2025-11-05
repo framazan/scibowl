@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import './index.css';
 import App from './App.jsx';
+import Home from './components/home/Home.jsx';
 import BuzzerLanding from './components/buzzer/BuzzerLanding.jsx';
 import BuzzRoom from './components/buzzer/BuzzRoom.jsx';
 import RoundGeneratorWrapper from './components/buzzer/RoundGeneratorWrapper.jsx';
@@ -15,11 +16,11 @@ import SignIn from './components/SignIn.jsx';
 // Removed NotFound component usage so hosting can serve static 404.html
 
 // Route changes:
-//  - Root path now 301/302 client-side redirected to /round-generator for canonical SEO-friendly URL
+//  - Root path ('/') is now a dedicated Home landing page
 //  - /round-generator hosts the existing Round Generator experience
 //  - /signin unchanged
 const router = createBrowserRouter([
-  { path: '/', element: <Navigate to="/round-generator" replace /> },
+  { path: '/', element: <Home /> },
   { path: '/round-generator', element: <App /> },
   { path: '/practice', element: <App /> },
   { path: '/admin', element: <App /> },
@@ -32,6 +33,8 @@ const router = createBrowserRouter([
   // Multiplayer
   { path: '/multiplayer', element: <MultiplayerLanding /> },
   { path: '/multiplayer/:roomId', element: <MultiplayerRoom /> },
+  // Catch-all: send unknown paths to Home to avoid landing on generator by accident
+  { path: '*', element: <Navigate to="/" replace /> },
 ]);
 
 createRoot(document.getElementById('root')).render(

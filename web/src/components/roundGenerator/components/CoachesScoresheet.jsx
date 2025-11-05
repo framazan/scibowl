@@ -16,7 +16,7 @@ export default function CoachesScoresheet({ rows = [], players = [] }) {
         <TeamTable label="Team A" rows={rows} team="A" players={teamAPlayers} />
         <TeamTable label="Team B" rows={rows} team="B" players={teamBPlayers} />
       </div>
-      <div style={{ marginTop: 24, fontSize: 10, textAlign: 'center', opacity: .7 }}>Generated {new Date().toLocaleString()} — scibowl.app</div>
+      <div style={{ marginTop: 24, fontSize: 10, textAlign: 'center', opacity: .7 }}>Generated {new Date().toLocaleString()} — atombowl</div>
     </div>
   );
 }

@@ -10,9 +10,43 @@ export default function TabbedHeader({ auth }) {
   const { themePref, setThemePref, dark, setDark } = useThemePreference();
   const navigate = useNavigate();
   const location = useLocation();
+  const isHome = location.pathname === '/';
+  const [scrolled, setScrolled] = React.useState(false);
+
+  // On home, reveal brand once the bottom of the hero logo reaches the bottom of the header; on other pages always show
+  React.useEffect(() => {
+    if (!isHome) { setScrolled(true); return; }
+    const compute = () => {
+      try {
+        const logo = document.getElementById('home-logo');
+        // Determine header height from ref or CSS var fallback
+        let headerH = 0;
+        if (headerRef.current) {
+          headerH = Math.ceil(headerRef.current.getBoundingClientRect().height || 0);
+        }
+        if (!headerH) {
+          const cssH = getComputedStyle(document.documentElement).getPropertyValue('--header-h');
+          headerH = parseInt(cssH || '72', 10) || 72;
+        }
+        if (!logo) { setScrolled(window.scrollY > headerH); return; }
+        const rect = logo.getBoundingClientRect();
+        // Reveal when the bottom of the logo has reached the bottom edge of the header
+        setScrolled(rect.bottom <= headerH);
+      } catch {}
+    };
+    compute();
+    window.addEventListener('scroll', compute, { passive: true });
+    window.addEventListener('resize', compute);
+    return () => {
+      window.removeEventListener('scroll', compute);
+      window.removeEventListener('resize', compute);
+    };
+  }, [isHome]);
 
   // Derive active tab from pathname
-  const tab = location.pathname.startsWith('/practice')
+  const tab = location.pathname === '/'
+    ? 'home'
+    : location.pathname.startsWith('/practice')
     ? 'practice'
     : location.pathname.startsWith('/admin')
     ? 'admin'
@@ -28,6 +62,7 @@ export default function TabbedHeader({ auth }) {
   // Define tabs (append Admin as a tab for admin users only)
   const tabs = React.useMemo(() => {
     const base = [
+      { key: 'home', label: 'Home', path: '/' },
       { key: 'practice', label: 'Practice', path: '/practice' },
       { key: 'generate', label: 'Round Generator', path: '/round-generator' },
       { key: 'multiplayer', label: 'Multiplayer', path: '/multiplayer' },
@@ -84,12 +119,21 @@ export default function TabbedHeader({ auth }) {
   return (
     <header ref={headerRef} className="header-bar" style={{ overflow: 'visible' }}>
       <div className="w-full px-3 sm:px-4 py-2 sm:py-3 flex items-center justify-between" style={{ position: 'relative', zIndex: 10 }}>
-        <div className="brand-cluster flex items-center gap-2">
+        <div
+          className="brand-cluster flex items-center gap-2"
+          style={{
+            transition: 'opacity .35s ease, transform .35s ease',
+            opacity: scrolled ? 1 : 0,
+            transform: scrolled ? 'translateY(0) scale(1)' : 'translateY(8px) scale(0.98)',
+            pointerEvents: scrolled ? 'auto' : 'none',
+          }}
+          aria-hidden={isHome && !scrolled}
+        >
           <img src="/logo.png" alt="atombowl Logo" className="w-8 h-8 sm:w-9 sm:h-9" />
           {/* Full title on large screens */}
-          <div className="font-semibold tracking-tight hidden lg:block" style={{ color: 'rgba(18, 25, 48, 1)' }}>atombowl</div>
+          <div className="font-semibold tracking-tight hidden lg:block text-[#121930] dark:text-white">atombowl</div>
           {/* Abbreviated on small/medium */}
-          <div className="font-semibold tracking-tight hidden sm:block lg:hidden" style={{ color: 'rgba(18, 25, 48, 1)' }}>DSB</div>
+          <div className="font-semibold tracking-tight hidden sm:block lg:hidden text-[#121930] dark:text-white">DSB</div>
           {/* No text on extra-small: logo only */}
         </div>
         <nav className="tabs flex items-center gap-2 relative overflow-x-auto whitespace-nowrap" style={{ position: 'relative' }}>
@@ -108,6 +152,7 @@ export default function TabbedHeader({ auth }) {
                 textAlign: 'center',
                 position: 'relative',
                 zIndex: 11,
+                textTransform: 'lowercase',
                 color: tab === item.key
                   ? '#ffffff'
                   : (dark ? 'rgba(229, 231, 235, 0.9)' : '#1f2a44'),

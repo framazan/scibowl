@@ -8,7 +8,6 @@ import useAuth from './data/useAuth.js';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { RoundGeneratorSEO, PracticeSEO } from './components/SEO.jsx';
 import { useRoundSession } from './context/RoundSessionContext.jsx';
-// import AdSlot from './components/AdSlot.jsx'; // Uncomment when you have a real slot id
 import Layout from './components/layout/Layout.jsx';
 import Loading from './components/layout/Loading.jsx';
 
@@ -34,6 +33,19 @@ export default function App() {
       {/* Admin mode border style - fixed overlay so content cannot cover it */}
       {tab === 'practice' ? <PracticeSEO /> : <RoundGeneratorSEO />}
       <Layout auth={auth}>
+        {/* Always-on descriptive teaser for SEO and users while data loads */}
+        {tab !== 'admin' && (
+          <div className="glass p-6 mb-4">
+            <h1 className="text-xl font-semibold">
+              {tab === 'practice' ? 'Practice Mode' : 'Round Generator'}
+            </h1>
+            <p className="text-sm opacity-80">
+              {tab === 'practice'
+                ? 'Drill Science Bowl toss-ups and bonuses with keyboard shortcuts, adjustable readout, and instant feedback.'
+                : 'Generate custom Science Bowl rounds from curated tournaments. Filter by category, pick rounds, include toss-ups and bonuses, and export to PDF.'}
+            </p>
+          </div>
+        )}
         {q.loadingTournaments && (
           <div className="glass p-6">Loading tournaments…</div>
         )}

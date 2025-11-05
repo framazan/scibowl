@@ -3,12 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <!--- NOT ACTIVE, POTENTIAL INTEGRATION IN 2026 -->
-    <meta name="google-adsense-account" content="ca-pub-7585878218149059" /> 
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7585878218149059" crossorigin="anonymous"></script>
-  <title>Science Bowl Round Generator & Practice | atombowl</title>
-  <meta name="description" content="Generate custom Science Bowl practice rounds instantly. Filter by tournament, practice toss-ups and bonuses, and prepare for competitions." />
-  <link rel="canonical" href="https://www.sciencebowl.org/" />
+  <title>atombowl — Science Bowl practice, multiplayer, buzzer, and round generator</title>
+  <meta name="description" content="atombowl unifies your Science Bowl prep: practice mode with instant feedback, multiplayer rooms, a real-time buzzer, and a fast round generator with visual bonuses." />
+  <link rel="canonical" href="https://sciencebowl.org/" data-dynamic-canonical="true" />
   <meta name="robots" content="index,follow" />
   <meta name="author" content="atombowl" />
   <meta name="keywords" content="Science Bowl practice, round generator, science bowl questions, science competition prep" />
@@ -16,17 +13,17 @@
   <!-- Open Graph -->
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="atombowl" />
-  <meta property="og:title" content="Science Bowl Round Generator & Practice" />
-  <meta property="og:description" content="Generate custom Science Bowl practice rounds instantly and sharpen your team’s competitive edge." />
-  <meta property="og:url" content="https://www.sciencebowl.org/" />
-  <meta property="og:image" content="https://www.sciencebowl.org/logo.png" />
+  <meta property="og:title" content="atombowl — Science Bowl practice, multiplayer, buzzer" />
+  <meta property="og:description" content="Practice questions, generate rounds, and buzz together online — all in one place." />
+  <meta property="og:url" content="https://sciencebowl.org/" data-dynamic-og-url="true" />
+  <meta property="og:image" content="/logo.png" />
   <meta property="og:image:alt" content="atombowl Logo" />
 
   <!-- Twitter -->
-  <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="Science Bowl Round Generator & Practice" />
-  <meta name="twitter:description" content="Generate custom Science Bowl practice rounds instantly." />
-  <meta name="twitter:image" content="https://www.sciencebowl.org/logo.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="atombowl — Science Bowl practice, multiplayer, buzzer" />
+  <meta name="twitter:description" content="Practice mode, multiplayer rooms, and a fast round generator." />
+  <meta name="twitter:image" content="/logo.png" />
 
   <!-- Manifest & PWA basics -->
   <link rel="manifest" href="/site.webmanifest" />
@@ -43,13 +40,35 @@
         if (dark) document.documentElement.classList.add('dark');
         var meta = document.querySelector('meta[name="theme-color"]');
         if (meta) meta.setAttribute('content', dark ? '#000000' : '#ffffff');
+        // Dynamically set canonical and og:url to the current page URL
+        var can = document.querySelector('link[rel="canonical"][data-dynamic-canonical]');
+        if (can) { can.setAttribute('href', window.location.origin + window.location.pathname); }
+        var og = document.querySelector('meta[property="og:url"][data-dynamic-og-url]');
+        if (og) { og.setAttribute('content', window.location.origin + window.location.pathname); }
       } catch (e) {}
     })();
   </script>
 
   <!-- Structured Data JSON-LD -->
-  <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"WebApplication","name":"Science Bowl Round Generator","url":"https://www.sciencebowl.org/","applicationCategory":"EducationalApplication","description":"Generate custom Science Bowl practice rounds instantly.","operatingSystem":"Any","creator":{"@type":"Organization","name":"atombowl"}}
+  <script type="application/ld+json" id="app-ldjson">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "atombowl",
+    "url": "https://sciencebowl.org/",
+    "applicationCategory": "EducationalApplication",
+    "description": "Science Bowl practice mode, multiplayer rooms, real-time buzzer, and round generator with visual bonuses.",
+    "operatingSystem": "Any",
+    "creator": {"@type":"Organization","name":"atombowl"},
+    "offers": {"@type":"Offer","price": "0", "priceCurrency": "USD"},
+    "featureList": [
+      "Practice mode with instant feedback",
+      "Multiplayer rooms with chat",
+      "Real-time buzzer system",
+      "Round generator and PDF export",
+      "Visual bonus support"
+    ]
+  }
   </script>
     <!-- Favicon variants -->
     <link rel="icon" type="image/png" sizes="32x32" href="/logo.png?v=1" />
@@ -57,11 +76,35 @@
     <link rel="apple-touch-icon" href="/logo.png?v=1" />
     <link rel="shortcut icon" href="/logo.png?v=1" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="Science Bowl" />
+  <meta name="apple-mobile-web-app-title" content="atombowl" />
   <!-- Removed duplicate theme-color tag -->
   </head>
   <body class="bg-[#f5f5f7] text-text">
     <div id="root"></div>
+    <noscript>
+      <style>
+        .noscript-seo{max-width:960px;margin:2rem auto;padding:1rem 1.25rem;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.06);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;}
+        .noscript-seo h1{font-size:1.25rem;margin:0 0 .5rem 0}
+        .noscript-seo h2{font-size:1rem;margin:1rem 0 .5rem 0}
+        .noscript-seo p, .noscript-seo li{font-size:.95rem;line-height:1.5;color:#333}
+        .noscript-seo a{color:#2563eb;text-decoration:underline}
+      </style>
+      <div class="noscript-seo">
+        <h1>atombowl — Science Bowl practice, multiplayer, buzzer, and round generator</h1>
+        <p>
+          atombowl helps you prepare for Science Bowl with a fast
+          <a href="/round-generator">round generator</a>,
+          a real-time <a href="/multiplayer">multiplayer</a> practice mode with live buzzer and chat,
+          and a simple online <a href="/buzzer">buzzer</a>.
+        </p>
+        <h2>Round Generator</h2>
+        <p>Build custom rounds instantly from curated tournaments. Filter by category, include toss-ups and bonuses, and export to PDF.</p>
+        <h2>Multiplayer</h2>
+        <p>Create or join rooms to practice together. Buzz in on toss-ups, type answers, and keep score as a team.</p>
+        <h2>Online Buzzer</h2>
+        <p>Host a buzzer room, share the code, and start buzzing from any device.</p>
+      </div>
+    </noscript>
     <script type="module" src="/src/main.jsx"></script>
     <!-- Removed duplicate static footer; dynamic React footer lives in App.jsx -->
   </body>

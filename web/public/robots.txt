@@ -1,7 +1,9 @@
 User-agent: *
-# Canonical landing experience now lives at /round-generator
-# Practice mode available at /practice (early / evolving)
-# (Root / still served but instantly redirects client-side.)
+# Primary experiences
+Allow: /round-generator
+Allow: /practice
+Allow: /multiplayer
+Allow: /buzzer
 
 # Prevent indexing of auth page
 Disallow: /signin
@@ -9,6 +11,7 @@ Disallow: /signin
 # (Optional) specify crawl delay for non-Google bots (Google ignores this)
 # Crawl-delay: 5
 
+# Explicit absolute sitemap URL for clarity
 Sitemap: https://sciencebowl.org/sitemap.xml
 
-# Last updated: 2025-09-20
+# Last updated: 2025-11-02

@@ -35,7 +35,7 @@ export default function QuestionPanel({
         </div>
       ) : currentQ ? (
         <div>
-          <div className="text-sm text-black/60 dark:text-white/80 mb-2">
+          <div className="text-sm text-black/60 dark:text-white/80 mb-2 flex items-center gap-2 flex-wrap">
             <span className="font-semibold">{String(currentQ.tournament).toUpperCase()}</span>{' \u2022 '}
             ROUND {currentQ.round ?? '\u2014'}
             {' \u2022 '}{currentQ.category}

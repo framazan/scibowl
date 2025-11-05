@@ -8,6 +8,7 @@ import CategoriesSelector from './roundGenerator/components/CategoriesSelector.j
 import { parseMCChoices as parseMCChoicesRG, findBonus as findBonusRG } from './roundGenerator/utils/helpers.js';
 import { isVisualBonus, getVisualBonusUrl } from '../data/visualBonuses.js';
 import { checkAnswerMC as apiCheckMC, checkAnswerBonus as apiCheckBonus } from '../api/client.js';
+import useThemePreference from '../hooks/useThemePreference.js';
 
 function DoubleHelix() {
   return (
@@ -62,22 +63,9 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
     globalNumericRoundMax,
   } = useFilters({ questions, lazy });
 
-  // Track dark mode to style components consistently with RoundGenerator
-  const [isDark, setIsDark] = useState(() => {
-    try { return document.documentElement.classList.contains('dark'); } catch { return false; }
-  });
-  useEffect(() => {
-    try {
-      const root = document.documentElement;
-      const update = () => setIsDark(root.classList.contains('dark'));
-      update();
-      const mo = new MutationObserver(update);
-      mo.observe(root, { attributes: true, attributeFilter: ['class'] });
-      const mql = window.matchMedia('(prefers-color-scheme: dark)');
-      mql.addEventListener('change', update);
-      return () => { mo.disconnect(); mql.removeEventListener('change', update); };
-    } catch { /* no-op */ }
-  }, []);
+  // Track dark mode via shared preference hook (reactive to header toggle)
+  const { dark } = useThemePreference();
+  const isDark = !!dark;
 
   // Left pane collapsible and resizable state
   const [leftPaneCollapsed, setLeftPaneCollapsed] = useState(false);
@@ -282,13 +270,14 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
 
   // UI scaffold similar to RoundGenerator's left panel
   return (
-    <div
-      className={`grid gap-6 w-full md:grid-cols-[var(--left-pane-w)_minmax(0,1fr)]`}
-      style={{
-        // On small screens we let CSS stack naturally (grid becomes 1col). On md+, use the variable.
-        ['--left-pane-w']: (leftPaneCollapsed && !leftPaneHovered) ? '25px' : `${leftPaneWidth}px`
-      }}
-    >
+    <div className="relative">
+      <div
+        className={`relative z-10 grid gap-6 w-full md:grid-cols-[var(--left-pane-w)_minmax(0,1fr)]`}
+        style={{
+          // On small screens we let CSS stack naturally (grid becomes 1col). On md+, use the variable.
+          ['--left-pane-w']: (leftPaneCollapsed && !leftPaneHovered) ? '25px' : `${leftPaneWidth}px`
+        }}
+      >
       <div className="md:self-start relative">
         {/* Invisible hover area for collapsed pane */}
         {leftPaneCollapsed && (
@@ -322,7 +311,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
           )}
         </button>
         <div
-          className={`glass p-6 space-y-6 transition-all duration-300 ${leftPaneCollapsed && !leftPaneHovered ? 'opacity-0 pointer-events-none scale-95' : 'opacity-100 scale-100'}`}
+          className={`glass p-6 space-y-6 bg-white/80 dark:bg-darkcard/70 backdrop-blur transition-all duration-300 ${leftPaneCollapsed && !leftPaneHovered ? 'opacity-0 pointer-events-none scale-95' : 'opacity-100 scale-100'}`}
           onMouseEnter={() => setLeftPaneHovered(true)}
           onMouseLeave={() => setLeftPaneHovered(false)}
         >
@@ -461,7 +450,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
 
       <div className="min-w-0">
         {!current ? (
-          <div className="glass p-6">
+          <div className="glass p-6 bg-white/80 dark:bg-darkcard/70 backdrop-blur">
             {practicePool.length ? (
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div>Ready to begin.</div>
@@ -516,7 +505,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
           <div className="space-y-2">
             <div className="text-sm font-semibold text-black/60 dark:text-white/60">Previous Questions</div>
             {previousQuestions.map((q, idx) => (
-              <div key={q.id || idx} className="glass p-4 flex items-center justify-between">
+              <div key={q.id || idx} className="glass p-4 bg-white/80 dark:bg-darkcard/70 backdrop-blur flex items-center justify-between">
                 <div className="text-sm">
                   <span className="font-semibold">{String(q.tournament).toUpperCase()}</span>
                   {' • Round '}{q.round}
@@ -531,6 +520,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
             ))}
           </div>
         )}
+      </div>
       </div>
     </div>
   );
@@ -766,7 +756,7 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
         /* If math is the very first thing in a block, don't indent it */
         .practice-katex > .katex:first-child { margin-left: 0; }
       `}</style>
-      <div className="glass p-6">
+      <div className="glass p-6 bg-white/80 dark:bg-darkcard/70 backdrop-blur">
         <div className="text-sm text-black/60 dark:text-white/80 mb-2">
           <span className="font-semibold">{tournament_clean}</span>{' \u2022 '}
           ROUND {current.round ?? '\u2014'}
@@ -809,7 +799,7 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
           </div>
         )}
       </div>
-      <div className="glass p-6 flex flex-col justify-between" style={{ minHeight: '40vh', width: '100%' }}>
+      <div className="glass p-6 bg-white/80 dark:bg-darkcard/70 backdrop-blur flex flex-col justify-between" style={{ minHeight: '40vh', width: '100%' }}>
         <label className="block text-sm font-medium mb-2">Your answer</label>
         {/* Show radio buttons for MC, textbox for short answer only */}
         {Array.isArray(mcChoices) && mcChoices.length > 0 ? (

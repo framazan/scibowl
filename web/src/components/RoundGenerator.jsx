@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useRef } from 'react';
-import { idbGet } from '../data/idb.js';
+import { listSessionRoundsMeta, swapToIndex } from '../data/sessionRoundsCache.js';
 import { AlertTriangle, Plus, Minus, FileDown, CloudCheck, Trash2, ChevronRight, ChevronUp, ChevronDown, ArrowUp, List, RefreshCw, FolderPlus, Pencil, Maximize2, Play } from 'lucide-react';
 import LatexRenderer from './LatexRenderer.jsx';
 import { getRoundsIndex, getRoundDetail, saveUserRound, buildExcludeSetFromRound, renameUserRound, syncUserRoundsCache, deleteUserRound, setUserRoundFolder, getRoundFolders, addRoundFolder, renameRoundFolder, deleteRoundFolder, claimSharedPresetRound } from '../data/rounds.firestore.js';
@@ -21,6 +21,7 @@ import ScorekeeperPane from './roundGenerator/components/ScorekeeperPane.jsx';
 import SubstitutionModal from './roundGenerator/components/SubstitutionModal.jsx'; // New modal for structured player substitutions
 import { checkAnswerMC as apiCheckMC, checkAnswerBonus as apiCheckBonus } from '../api/client.js';
 import { useRoundSession } from '../context/RoundSessionContext.jsx';
+import useThemePreference from '../hooks/useThemePreference.js';
 import CollapsiblePinButton from './roundGenerator/components/CollapsiblePinButton.jsx';
 
 export default function RoundGenerator({ questions = [], lazy = null, auth = null, persistedGenerated = null, setPersistedGenerated = null, onNewRound = null }) {
@@ -93,7 +94,7 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
   const generated = Array.isArray(persistedGenerated) ? persistedGenerated : localGenerated;
   const setGenerated = typeof setPersistedGenerated === 'function' ? setPersistedGenerated : setLocalGenerated;
   // Session history paginator (previously generated rounds this session)
-  const { history } = useRoundSession();
+  const { history, setHistory } = useRoundSession();
   const [histPos, setHistPos] = useState(null);
   React.useEffect(() => {
     if (Array.isArray(history) && history.length > 0) setHistPos(history.length - 1);
@@ -109,6 +110,8 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
     setHasUnsavedRound(true);
     resetScorekeeping();
     try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
+    // Keep session cache's current pointer aligned with paginator selection
+    try { swapToIndex(pos + 1).catch(()=>{}); } catch {}
   }
   // Question type selection now driven by checkboxes
   const [includeTossups, setIncludeTossups] = useState(true);
@@ -133,27 +136,13 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
   const pdfRef = React.useRef(null);
   const QUESTIONS_PER_PAGE = 2;
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [genLoading, setGenLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   // moved into useUserRounds
   const [showBackToTop, setShowBackToTop] = useState(false);
-  // Track dark mode so we can adapt tournament selection gradient for accessibility
-  const [isDark, setIsDark] = useState(() => {
-    try { return document.documentElement.classList.contains('dark'); } catch { return false; }
-  });
-  React.useEffect(() => {
-    try {
-      const root = document.documentElement;
-      const update = () => setIsDark(root.classList.contains('dark'));
-      update();
-      // Observe class attribute changes (tailwind dark mode toggles class)
-      const mo = new MutationObserver(update);
-      mo.observe(root, { attributes: true, attributeFilter: ['class'] });
-      // Also listen to OS scheme changes as a fallback
-      const mql = window.matchMedia('(prefers-color-scheme: dark)');
-      mql.addEventListener('change', update);
-      return () => { mo.disconnect(); mql.removeEventListener('change', update); };
-    } catch { /* no-op in non-browser */ }
-  }, []);
+  // Track dark mode via shared preference hook (reactive to header toggle)
+  const { dark } = useThemePreference();
+  const isDark = !!dark;
   // Scorekeeper / stats state
   const [scorekeeping, setScorekeeping] = useState(false); // whether scorekeeping pane is open
   const nextPlayerIdRef = useRef(9);
@@ -881,6 +870,9 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
       setShowUnsavedDialog(true);
       return;
     }
+    const showLoad = Number(count) > 50;
+    if (showLoad) setGenLoading(true);
+    try {
   // Ensure questions are loaded (lazy mode) for the selected tournaments
   try { if (isLazy && selectedTournaments.length > 0) { await lazy.ensureLoaded(selectedTournaments); } } catch {}
   console.group('RoundGenerator.generate');
@@ -1008,6 +1000,9 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
     }
     setHasUnsavedRound(true);
     console.groupEnd();
+    } finally {
+      if (showLoad) setGenLoading(false);
+    }
   }
 
   async function onSaveRound() {
@@ -1102,7 +1097,7 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
       const html2pdf = await loadHtml2Pdf();
       const opt = {
         margin:       [12, 12, 12, 12], // 12mm margins
-        filename:     `SciBowl-Round-${new Date().toISOString().slice(0,10)}.pdf`,
+        filename:     `atombowl-Round-${new Date().toISOString().slice(0,10)}.pdf`,
         image:        { type: 'jpeg', quality: 0.95 },
         html2canvas:  { scale: 2, useCORS: true, letterRendering: true, scrollY: 0 },
         // Use CSS-controlled breaks only; avoid-all can cause big gaps/blank pages
@@ -1175,31 +1170,44 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
     }
   }
 
-  // Restore last generated round from localStorage (ids + tournaments) if nothing currently loaded
+  // Hydrate current round and paginator history from session-scoped cache after refresh.
   React.useEffect(() => {
-    if (generated && generated.length > 0) return;
     (async () => {
+      // If we already have some history and a generated round, skip hydration
+      if ((history?.length || 0) > 0 && (generated?.length || 0) > 0) return;
       try {
-        const meta = await idbGet('sb_current_round_meta');
-        if (!Array.isArray(meta) || meta.length === 0) return;
-        // Determine tournaments to load
+        const metaRounds = await listSessionRoundsMeta(); // [current, ...old]
+        if (!Array.isArray(metaRounds) || metaRounds.length === 0) return;
+        // Ensure all referenced tournaments are loaded (lazy mode)
         const tset = new Set();
-        for (const rec of meta) { if (rec?.tu?.tournament) tset.add(rec.tu.tournament); if (rec?.bo?.tournament) tset.add(rec.bo.tournament); }
+        for (const m of metaRounds) {
+          for (const rec of (m || [])) {
+            if (rec?.tu?.tournament) tset.add(rec.tu.tournament);
+            if (rec?.bo?.tournament) tset.add(rec.bo.tournament);
+          }
+        }
         const tlist = Array.from(tset);
         try { if (isLazy && tlist.length) { await lazy.ensureLoaded(tlist); } } catch {}
+        // Build lookup across the loaded questions (or full validQuestions if not lazy)
         const sourceQs = isLazy ? lazy.getLoadedQuestions(tlist.length ? tlist : selectedTournaments) : validQuestions;
         const byId = new Map(sourceQs.map(q => [q.id, q]));
-        const pairs = meta.map(rec => ({
+        const materialize = (meta) => (meta || []).map(rec => ({
           tossup: rec?.tu?.id ? (byId.get(rec.tu.id) || null) : null,
           bonus: rec?.bo?.id ? (byId.get(rec.bo.id) || null) : null,
         })).filter(p => p.tossup || p.bonus);
-        if (pairs.length > 0) {
-          setGenerated(pairs);
-        }
+        const pairsList = metaRounds.map(materialize).filter(arr => Array.isArray(arr));
+        if (pairsList.length === 0) return;
+        // First entry is current; the rest are previous in order
+        const currentPairs = pairsList[0] || [];
+        const prevPairs = pairsList.slice(1);
+        // Set generated and full session history for paginator
+        if (currentPairs.length > 0) setGenerated(currentPairs);
+        const mergedHistory = [...prevPairs, currentPairs].filter(arr => Array.isArray(arr));
+        if (mergedHistory.length > 0) setHistory(mergedHistory);
       } catch {}
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLazy, lazy, validQuestions]);
+  }, [isLazy, lazy, validQuestions, selectedTournaments]);
 
   // Add left pane collapse + resizable state
   const [leftPaneCollapsed, setLeftPaneCollapsed] = useState(false);
@@ -1244,13 +1252,14 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
   }, [leftPaneWidth]);
 
   return (
-    <div
-      className={`grid gap-6 max-w-[100vw] w-full overflow-x-hidden ${scorekeeping ? 'transition-all' : ''} md:[grid-template-columns:var(--left-pane-w)_minmax(0,1fr)]`}
-      style={{
-        ...(scorekeeping ? { paddingRight: 420 } : {}),
-        ['--left-pane-w']: (leftPaneCollapsed && !leftPaneHovered) ? '25px' : `${leftPaneWidth}px`,
-      }}
-    >
+    <div className="relative">
+      <div
+        className={`relative z-10 grid gap-6 max-w-[100vw] w-full overflow-x-hidden ${scorekeeping ? 'transition-all' : ''} md:[grid-template-columns:var(--left-pane-w)_minmax(0,1fr)]`}
+        style={{
+          ...(scorekeeping ? { paddingRight: 420 } : {}),
+          ['--left-pane-w']: (leftPaneCollapsed && !leftPaneHovered) ? '25px' : `${leftPaneWidth}px`,
+        }}
+      >
       <div className={`md:self-start ${scorekeeping ? 'hidden' : ''} relative`}>
         {/* Invisible hover area for collapsed pane */}
         {leftPaneCollapsed && (
@@ -1269,7 +1278,7 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
           setLeftPaneHovered={setLeftPaneHovered}
         />
         <div
-          className={`glass p-6 space-y-6 min-w-0 transition-all duration-300 ${leftPaneCollapsed && !leftPaneHovered ? 'opacity-0 pointer-events-none scale-95' : 'opacity-100 scale-100'}`}
+          className={`glass p-6 space-y-6 bg-white/80 dark:bg-darkcard/70 backdrop-blur min-w-0 transition-all duration-300 ${leftPaneCollapsed && !leftPaneHovered ? 'opacity-0 pointer-events-none scale-95' : 'opacity-100 scale-100'}`}
           onMouseEnter={() => setLeftPaneHovered(true)}
           onMouseLeave={() => setLeftPaneHovered(false)}
         >
@@ -1354,12 +1363,21 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
             onChange={e => setCount(Number(e.target.value))} />
         </div>
   <div className="pt-2 flex flex-wrap justify-center gap-4 w-full">
-    <button className="btn btn-fancy flex items-center gap-2 hover-lift" onClick={generate} style={{ minWidth: 140 }}>
-      {/* Magic wand icon */}
-      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 4V2m0 20v-2m7-7h-2M4 12H2m16.24-6.24l-1.42 1.42M6.34 17.66l-1.42 1.42M17.66 17.66l-1.42-1.42M6.34 6.34l-1.42-1.42M12 8a4 4 0 100 8 4 4 0 000-8z" />
-      </svg>
-      Generate
+    <button className="btn btn-fancy flex items-center gap-2 hover-lift disabled:opacity-50 disabled:cursor-not-allowed" onClick={generate} disabled={genLoading} style={{ minWidth: 140 }}>
+      {genLoading ? (
+        <span className="inline-flex items-center">
+          <span className="h-4 w-4 mr-2 inline-block animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" />
+          Generating...
+        </span>
+      ) : (
+        <>
+          {/* Magic wand icon */}
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 4V2m0 20v-2m7-7h-2M4 12H2m16.24-6.24l-1.42 1.42M6.34 17.66l-1.42 1.42M17.66 17.66l-1.42-1.42M6.34 6.34l-1.42-1.42M12 8a4 4 0 100 8 4 4 0 000-8z" />
+          </svg>
+          Generate
+        </>
+      )}
     </button>
     {auth?.user ? (
       <button className="btn btn-fancy flex items-center gap-2 hover-lift disabled:opacity-50 disabled:cursor-not-allowed" onClick={onSaveRound} disabled={saving || generated.length===0} style={{ minWidth: 140 }}>
@@ -1463,7 +1481,7 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
           return null;})()}
         {/** Compute search results *before* rendering main list **/}
         {displayPairs.length === 0 && (
-          <div className="glass p-6" role="status" aria-live="polite">
+          <div className="glass p-6 bg-white/80 dark:bg-darkcard/70 backdrop-blur" role="status" aria-live="polite">
             {committedSearch.trim()
               ? 'No matches found.'
               : generationAttempted
@@ -1474,9 +1492,10 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
         {displayPairs.map((pair, i) => {
           const pairActive = !scorekeeping || i === currentIndex;
           const showBonusContent = pairActive && (!scorekeeping || !pair.tossup || (tossupResults[i]?.result === 'correct') || i < currentIndex);
+          const keyBase = `${pair.tossup?.id ?? 'tu'}-${pair.bonus?.id ?? 'bo'}-${i}`;
           return (
             <QuestionPairCard
-              key={`${pair.tossup?.id ?? 'tu'}-${pair.bonus?.id ?? 'bo'}-${i}`}
+              key={keyBase}
               pair={pair}
               index={i}
               scorekeeping={scorekeeping}
@@ -1487,7 +1506,7 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
             />
           );
         })}
-      </div>
+  </div>
 
       {/* Scorekeeping side pane */}
       {scorekeeping && (
@@ -1792,6 +1811,7 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
           );
         })}
       </div>
+    </div>
     </div>
   );
 }

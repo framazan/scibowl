@@ -1,11 +1,11 @@
 {
-  "name": "Science Bowl Round Generator",
-  "short_name": "SciBowl",
+  "name": "atombowl",
+  "short_name": "atombowl",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#550000",
-  "description": "Generate custom Science Bowl practice rounds and prepare for competitions.",
+  "description": "Science Bowl practice mode, multiplayer rooms, real-time buzzer, and round generator with visual bonuses.",
   "icons": [
     {
       "src": "/logo.png?v=1",

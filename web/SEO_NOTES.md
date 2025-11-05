@@ -1,12 +1,14 @@
 # SEO & PWA Notes
 
-Replace https://sciencebowl.org with your production domain (custom Firebase Hosting domain or mapped custom domain):
+Canonical domain: https://sciencebowl.org
 
-Files to update:
+We intentionally keep all canonicals, sitemap URLs, and absolute references on sciencebowl.org (brand name is “atombowl”). Do not replace this domain unless there is a formal domain migration.
+
+Key files referencing the canonical domain:
 - `public/robots.txt` (Sitemap line)
 - `public/sitemap.xml` (<loc> values)
 - `index.html` (canonical, OG URL, image URL, JSON-LD)
-- `src/components/SEO.jsx` (canonical links)
+- `src/components/SEO.jsx` (canonical links per route via Helmet)
 
 ## Expanding the sitemap
 Add future routes by inserting additional <url> blocks with loc, changefreq, priority.
@@ -17,15 +19,17 @@ If you add dynamic content pages (e.g. /tournament/:id), consider generating sit
 Currently robots.txt disallows /signin and SignInSEO sets noindex. Keep that to avoid low-value page indexing.
 
 ## Meta / Structured Data
-Basic WebApplication schema added. You can expand with potentialAction entries (SearchAction) or documentation linking.
+Basic WebApplication schema is added in `index.html`. Route-level structured data (BreadcrumbList) is added for key pages in `SEO.jsx` (home/rounds/practice/multiplayer/buzzer). You can expand with potentialAction entries (SearchAction) or documentation linking.
+
+Helmet usage: Only include plain head elements directly inside `<Helmet>` (title, meta, link, script, noscript). Avoid custom React components as children of Helmet — they trigger `react-helmet-async` warnings.
 
 ## Performance / Lighthouse
 After deploying run Lighthouse. Ensure largest contentful paint is optimized (consider preloading critical font or using font-display swap). Consider adding <link rel="preconnect" to firebase domains if needed.
 
 ## Deployment Steps
-1. Replace domains.
-2. Run npm install in web to add react-helmet-async.
-3. Build and deploy: npm run build && firebase deploy --only hosting
+1. Verify sciencebowl.org remains the canonical domain in all locations.
+2. Ensure `react-helmet-async` is installed and used (`HelmetProvider` in `main.jsx`).
+3. Build and deploy: `npm run build` then `firebase deploy --only hosting`.
 
 ## Future Ideas
 - Add analytics (GA4 or privacy-friendly) and use gtag.js with consent mode.

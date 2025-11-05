@@ -4,6 +4,7 @@ import { listenPublicRooms, listenUserActiveRooms, createRoom as createRoomRtdb,
 import useAuth from '../../data/useAuth.js';
 import Layout from '../layout/Layout.jsx';
 import Loading from '../layout/Loading.jsx';
+import { MultiplayerSEO } from '../SEO.jsx';
 
 export default function MultiplayerLanding() {
   const auth = useAuth();
@@ -42,13 +43,19 @@ export default function MultiplayerLanding() {
     if (!auth?.user) { navigate('/signin'); return; }
     setCreating(true); setError('');
     try {
+      // Trim inputs and enforce passcode for private rooms
+      const trimmedName = (name || '').trim();
+      const trimmedPass = (passcode || '').trim();
+      if (isPrivate && !trimmedPass) {
+        throw new Error('Passcode is required for private rooms');
+      }
       const roomId = await createRoomRtdb({
-        name: (name || '').trim() || 'Room',
+        name: trimmedName || 'Room',
         isPrivate,
-        passcode: isPrivate ? passcode : '',
+        passcode: isPrivate ? trimmedPass : '',
       });
-      // Auto-join
-      await joinRoomRtdb({ roomId });
+      // Auto-join: include passcode so private room join does not fail
+      await joinRoomRtdb({ roomId, passcode: isPrivate ? trimmedPass : undefined });
       navigate(`/multiplayer/${roomId}`);
     } catch (e) {
       setError(e?.message || String(e));
@@ -73,6 +80,7 @@ export default function MultiplayerLanding() {
   return (
     <div className="min-h-screen app-radial-bg dark:app-radial-bg transition-colors glass-backdrop">
       <Layout auth={auth}>
+        <MultiplayerSEO />
         {auth.loading ? (
           <Loading />
         ) : (

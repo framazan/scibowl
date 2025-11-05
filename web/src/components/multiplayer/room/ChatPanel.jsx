@@ -70,36 +70,6 @@ export default function ChatPanel({
     } catch {}
   }, [messages?.length, isAtBottom]);
 
-  // Keep pinned to bottom on content size changes (e.g., live typing bubble grows) without animating
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => {
-      try {
-        if (!isAtBottom) return;
-        // Snap to bottom to avoid jitter during rapid size changes
-        el.scrollTop = el.scrollHeight;
-      } catch {}
-    });
-    ro.observe(el);
-    return () => { try { ro.disconnect(); } catch {} };
-  }, [isAtBottom]);
-
-  // When new typing arrives and user is near the bottom, ensure the latest draft text is visible
-  useEffect(() => {
-    try {
-      const el = listRef.current;
-      if (!el) return;
-      const threshold = 160; // be generous so we keep the drafting text in view
-      const nearBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) <= threshold;
-      if (nearBottom) {
-        // Snap without animation to avoid jitter
-        el.scrollTop = el.scrollHeight;
-        setIsAtBottom(true);
-      }
-    } catch {}
-  }, [JSON.stringify(typingMap)]);
-
   // Ensure bottom on mount
   useEffect(() => {
     const id = setTimeout(() => scrollToBottom(true, 160), 0);
@@ -117,6 +87,9 @@ export default function ChatPanel({
     });
     return arr;
   }, [JSON.stringify(typingMap), selfUid]);
+
+  // No fusion: render each message as its own bubble to simplify behavior
+  const flatMessages = useMemo(() => Array.isArray(messages) ? messages : [], [messages]);
 
   const handleScroll = () => {
     try {
@@ -143,7 +116,8 @@ export default function ChatPanel({
   const handleChange = (e) => {
     const val = e.target.value;
     setDraft(val);
-    onUpdateTyping?.(!!val, String(val).slice(0, 500));
+    // RTDB rules limit draft length to 200 chars; enforce here to avoid silent write failures
+    onUpdateTyping?.(!!val, String(val).slice(0, 200));
   };
 
   const handleSubmit = async (e) => {
@@ -161,38 +135,31 @@ export default function ChatPanel({
 
   return (
     <div className="flex flex-col h-[520px] max-h-[60vh]">
-  <div ref={listRef} onScroll={handleScroll} className="relative flex-1 overflow-y-auto pr-1 pb-6 space-y-2">
-        {(messages || []).map((m) => {
+      <div ref={listRef} onScroll={handleScroll} className="relative flex-1 overflow-y-auto pr-1 pb-10 space-y-2">
+        {flatMessages.map((m, idx) => {
           const mine = m.uid === selfUid;
+          const text = String(m.text || '');
+          const name = m.displayName || m.uid;
           return (
-            <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+            <div key={m.id || `${m.uid}-${idx}`} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[75%] px-3 py-2 rounded-2xl text-sm whitespace-pre-wrap break-words ${mine ? 'bg-blue-600 text-white rounded-br-md' : 'bg-black/5 dark:bg-white/10 text-black dark:text-white rounded-bl-md'}`}>
-                {!mine && (<div className="text-[10px] opacity-70 mb-0.5">{m.displayName || m.uid}</div>)}
-                <div>{m.text}</div>
+                {!mine && (<div className="text-[10px] opacity-70 mb-0.5">{name}</div>)}
+                <div>{text}</div>
               </div>
             </div>
           );
         })}
-        {/* Live-typing bubbles */}
-        {liveTypers.map((t) => (
-          <div key={`live-${t.uid}`} className="flex justify-start">
-            <div className="max-w-[75%] px-3 py-2 rounded-2xl text-sm whitespace-pre-wrap break-words bg-black/5 dark:bg-white/10 text-black dark:text-white rounded-bl-md border border-dashed border-black/10 dark:border-white/10">
-              <div className="text-[10px] opacity-70 mb-0.5">{t.name} (typing…)</div>
-              <div>{t.draft}</div>
-            </div>
-          </div>
-        ))}
-
-        {/* Go to bottom button */}
-        {!isAtBottom && (
-          <div className="absolute bottom-3 right-3">
-            <button
-              type="button"
-              onClick={() => scrollToBottom(true)}
-              className="px-3 py-1.5 rounded-full text-sm bg-white/90 dark:bg-darkcard/90 shadow border border-black/10 dark:border-white/10 hover:bg-white dark:hover:bg-darkcard"
-            >
-              Go to bottom
-            </button>
+        {/* Live-typing bubbles (overlay, do not affect scroll height) */}
+        {liveTypers.length > 0 && (
+          <div className="pointer-events-none absolute bottom-2 left-0 right-0 px-1 space-y-1 z-20">
+            {liveTypers.map((t) => (
+              <div key={`live-${t.uid}`} className="flex justify-start">
+                <div className="pointer-events-none max-w-[75%] px-3 py-2 rounded-2xl text-sm whitespace-pre-wrap break-words bg-black/70 dark:bg-white/20 text-white rounded-bl-md border border-dashed border-white/20 shadow">
+                  <div className="text-[10px] opacity-80 mb-0.5">{t.name} (typing…)</div>
+                  <div>{t.draft}</div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>

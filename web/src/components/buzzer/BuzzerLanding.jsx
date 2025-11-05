@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { getFirestore, onSnapshot, query, collection, where, deleteDoc, doc } from 'firebase/firestore';
 import BuzzerLayout from '../layout/BuzzerLayout.jsx';
 import Loading from '../layout/Loading.jsx';
+import { BuzzerSEO } from '../SEO.jsx';
 
 export default function BuzzerLanding() {
   const auth = useAuth();
@@ -86,6 +87,7 @@ export default function BuzzerLanding() {
 
   return (
     <BuzzerLayout>
+      <BuzzerSEO />
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="glass p-6 space-y-3">
           <h1 className="text-xl font-semibold">Host a Game</h1>

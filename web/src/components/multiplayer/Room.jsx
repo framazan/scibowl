@@ -4,7 +4,8 @@ import { getDatabase, ref, update as rtdbUpdate, onDisconnect, serverTimestamp }
 import useAuth from '../../data/useAuth.js';
 import Layout from '../layout/Layout.jsx';
 import Loading from '../layout/Loading.jsx';
-import { joinRoom as joinRoomRtdb, listenRoom as listenRoomRtdb, listenTyping as listenTypingRtdb, listenBuzzes as listenBuzzesRtdb, sendMessage as sendMessageRtdb, awardScore as awardScoreRtdb, setMpBuzzerOpen, attemptMpBuzz, clearMpBuzz, setMpCurrentQuestion, setAnswerStatus, mpLockoutUid, mpResetLockouts, setMpGrading, setStemFinishedAt, setAwaitNext, updateRoomSettings as updateRoomSettingsRtdb, removeMember as removeMemberRtdb, listenHistory as listenHistoryRtdb } from '../../data/multiplayer.rtdb.js';
+import { RoomSEO } from '../SEO.jsx';
+import { joinRoom as joinRoomRtdb, listenRoom as listenRoomRtdb, listenTyping as listenTypingRtdb, listenBuzzes as listenBuzzesRtdb, sendMessage as sendMessageRtdb, awardScore as awardScoreRtdb, setMpBuzzerOpen, attemptMpBuzz, clearMpBuzz, setMpCurrentQuestion, setAnswerStatus, mpLockoutUid, mpResetLockouts, setMpGrading, setStemFinishedAt, setChoicesFinishedAt, setAwaitNext, updateRoomSettings as updateRoomSettingsRtdb, removeMember as removeMemberRtdb, listenHistory as listenHistoryRtdb, claimAnswerTimeout } from '../../data/multiplayer.rtdb.js';
 import { getCurrentIdentity, ensureGuestIdentity, setGuestUsername, clearGuestIdentity, getGuestIdentity } from '../../data/identity.js';
 import { serverNow } from '../../data/serverTime.js';
 import { checkAnswerMC as apiCheckMC, checkAnswerBonus as apiCheckBonus } from '../../api/client.js';
@@ -112,6 +113,8 @@ export default function MultiplayerRoom() {
   const [choiceStreamCount, setChoiceStreamCount] = useState(0);
   const [revealChoicesAfterCheck, setRevealChoicesAfterCheck] = useState(false);
   const [mcTypedAnswer, setMcTypedAnswer] = useState('');
+  // Local tick to refresh countdown UIs
+  const [tick, setTick] = useState(0);
   // Removed userAnswer state (radio MC)
   // Local filter for question types
   const [selectedTypes, setSelectedTypes] = useState({ tossup: true, bonus: true });
@@ -177,6 +180,12 @@ export default function MultiplayerRoom() {
     if (!roomId) return;
     return listenHistoryRtdb({ roomId, onHistory: setHistory });
   }, [roomId]);
+
+  // Heartbeat to update timers ~5 times a second
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => (t + 1) % 1_000_000), 200);
+    return () => clearInterval(id);
+  }, []);
 
   // Ensure question sources are loaded for the current room
   // Build effective tournament list from (a) local UI selection, (b) room settings, (c) room.game fallback,
@@ -574,6 +583,84 @@ export default function MultiplayerRoom() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamFinished, currentQ?.id, !!room?.state?.stemFinishedAt]);
 
+  // Record a shared choicesFinishedAt once when all choices have streamed (or no choices exist)
+  useEffect(() => {
+    if (!currentQ) return;
+    if (!streamFinished) return; // wait for stem to finish first
+    if (room?.state?.choicesFinishedAt) return;
+    const hasChoices = Array.isArray(choices) && choices.length > 0;
+    const choicesDone = !hasChoices || choiceStreamCount >= 4;
+    if (!choicesDone) return;
+    (async () => {
+      try { await setChoicesFinishedAt({ roomId, at: serverNow() }); } catch {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentQ?.id, streamFinished, choiceStreamCount, !!room?.state?.choicesFinishedAt]);
+
+  // Derived timers
+  const buzzWindowMs = Number(room?.state?.buzzWindowMs || 0) || 0;
+  const buzzWindowStartAt = Number(room?.state?.buzzWindowStartAt || 0) || 0;
+  const buzzWindowRemainingMs = useMemo(() => {
+    if (!buzzWindowMs || !buzzWindowStartAt) return null;
+    const rem = buzzWindowMs - Math.max(0, serverNow() - buzzWindowStartAt);
+    return Math.max(0, rem);
+  }, [buzzWindowMs, buzzWindowStartAt, tick]);
+
+  const answerWindowUid = room?.state?.answerWindowUid || null;
+  const answerDeadlineAt = Number(room?.state?.answerWindowDeadlineAt || 0) || 0;
+  const answerWindowRemainingMs = useMemo(() => {
+    if (!answerWindowUid || !answerDeadlineAt) return null;
+    return Math.max(0, answerDeadlineAt - serverNow());
+  }, [answerWindowUid, answerDeadlineAt, tick]);
+
+  // Auto-close buzzer when shared buzz window expires (no active winner)
+  useEffect(() => {
+    if (!currentQ) return;
+    if (!room?.state?.buzzerOpen) return;
+    if (room?.state?.winnerUid) return;
+    if (room?.state?.awaitNext) return;
+    if (buzzWindowRemainingMs === null) return;
+    if (buzzWindowRemainingMs > 0) return;
+    (async () => { try { await setMpBuzzerOpen({ roomId, open: false }); } catch {} })();
+  }, [buzzWindowRemainingMs, !!currentQ, room?.state?.buzzerOpen, room?.state?.winnerUid, room?.state?.awaitNext]);
+
+  // Ensure buzz window start is anchored as soon as choices finish (if buzzer is open)
+  useEffect(() => {
+    if (!currentQ) return;
+    if (!room?.state?.buzzerOpen) return;
+    if (!room?.state?.choicesFinishedAt) return;
+    if (room?.state?.buzzWindowStartAt) return;
+    (async () => { try { await setMpBuzzerOpen({ roomId, open: true }); } catch {} })();
+  }, [!!currentQ, room?.state?.buzzerOpen, room?.state?.choicesFinishedAt, room?.state?.buzzWindowStartAt]);
+
+  // Auto-handle answer timeout after 3s if winner hasn't submitted
+  useEffect(() => {
+    if (!currentQ) return;
+    const uid = room?.state?.winnerUid;
+    if (!uid) return;
+    if (!answerWindowUid || uid !== answerWindowUid) return;
+    if (!answerWindowRemainingMs || answerWindowRemainingMs > 0) return;
+    const ansRec = answersMap?.[currentQ.id]?.[uid] || null;
+    if (ansRec) return; // already answered
+    // Try to claim handling; only one client proceeds
+    (async () => {
+      try {
+        const claimed = await claimAnswerTimeout({ roomId, uid });
+        if (!claimed) return;
+        const isTossup = String(currentQ?.question_type || '').toLowerCase() === 'tossup';
+        const interrupt = !!room?.state?.currentBuzzInterrupt;
+        const delta = isTossup ? (interrupt ? -4 : 0) : 0;
+        const identNow = getCurrentIdentity();
+        const displayName = identNow?.displayName || 'Player';
+        await setAnswerStatus({ roomId, questionId: currentQ.id, uid, displayName, data: { status: 'incorrect', text: '', correct: false, points: delta } });
+        if (delta !== 0) { try { await awardScoreRtdb({ roomId, uid, delta }); } catch {} }
+        await mpLockoutUid({ roomId, uid });
+        await clearMpBuzz({ roomId });
+        await setMpBuzzerOpen({ roomId, open: true });
+      } catch {}
+    })();
+  }, [answerWindowRemainingMs, answersMap, currentQ?.id, room?.state?.winnerUid, answerWindowUid]);
+
   // Join handler with passcode for private rooms
   async function handleJoinWithPass() {
     try {
@@ -612,7 +699,30 @@ export default function MultiplayerRoom() {
 
   if (auth.loading || !room) return (
     <div className="min-h-screen app-radial-bg dark:app-rad-bg transition-colors glass-backdrop">
-      <Layout auth={auth}><Loading /></Layout>
+      <Layout auth={auth}>
+        <RoomSEO />
+        <div className="glass p-6 space-y-3 max-w-3xl">
+          <h1 className="text-xl font-semibold">Multiplayer Room</h1>
+          <p className="opacity-80 text-sm">
+            Practice Science Bowl together in real time. Rooms support live buzzing, chat, and shared control of question flow. Create a room on the
+            <a className="text-blue-600 hover:underline ml-1" href="/multiplayer">multiplayer page</a> or join with a code.
+          </p>
+          <ul className="list-disc pl-5 text-sm opacity-80 space-y-1">
+            <li>Host or join private/public rooms</li>
+            <li>Buzz in on toss-ups and type answers</li>
+            <li>Multiple choice and short-answer grading</li>
+            <li>Filters for tournaments, categories, and rounds</li>
+          </ul>
+          <div className="pt-2">
+            <a href="/round-generator" className="text-blue-600 hover:underline text-sm">Try the Round Generator</a>
+            <span className="opacity-60 mx-2">•</span>
+            <a href="/buzzer" className="text-blue-600 hover:underline text-sm">Use the simple buzzer</a>
+          </div>
+          <div className="pt-3">
+            <Loading />
+          </div>
+        </div>
+      </Layout>
     </div>
   );
 
@@ -825,7 +935,14 @@ export default function MultiplayerRoom() {
           {(!needsPass || amMember) && (
             <div className="grid lg:grid-cols-3 gap-4 items-start">
               <div className="glass p-6 lg:col-span-2 space-y-4">
-                <PlayControls onStartNext={startOrNextQuestion} onTogglePause={togglePause} isPaused={!room?.state?.buzzerOpen} winnerActive={room?.state?.winnerUid} />
+                <PlayControls
+                  onStartNext={startOrNextQuestion}
+                  onTogglePause={togglePause}
+                  isPaused={!room?.state?.buzzerOpen}
+                  winnerActive={room?.state?.winnerUid}
+                  buzzWindowRemainingMs={buzzWindowRemainingMs}
+                  showBuzzTimer={!!currentQ && !!room?.state?.buzzerOpen && !!room?.state?.choicesFinishedAt && !room?.state?.winnerUid && !room?.state?.awaitNext && buzzWindowRemainingMs !== null}
+                />
                 {questionError && <div className="text-sm text-red-600">{questionError}</div>}
                 <QuestionPanel
                   grading={grading}
@@ -853,6 +970,8 @@ export default function MultiplayerRoom() {
                   onSubmit={submitAnswerOrChat}
                   onUpdateTyping={(typing, draft)=>updateTyping(roomId, typing, draft)}
                   mcInputRef={mcInputRef}
+                  answerWindowUid={answerWindowUid}
+                  answerWindowRemainingMs={answerWindowRemainingMs}
                 />
 
                 <HistoryPanel

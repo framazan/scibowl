@@ -24,6 +24,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Public countdown timers (homepage). Public read; admin-only write.
+    match /countdowns/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     // Users can read/write their own metadata and rounds
     match /users/{uid}/meta/{docId} {
       // Allow owners to read their own meta; additionally, allow public read of the admin presets doc

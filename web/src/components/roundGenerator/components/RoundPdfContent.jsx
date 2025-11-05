@@ -55,7 +55,7 @@ export default function RoundPdfContent({ displayPairs, QUESTIONS_PER_PAGE = 2, 
             if (slice.length > 0) groups.push(slice);
           }
           const today = new Date().toLocaleDateString();
-          const website = 'scibowl.app';
+          const website = 'atombowl';
           return groups.map((group, gi) => {
             const base = gi * QUESTIONS_PER_PAGE;
             const pageNum = gi + 1;

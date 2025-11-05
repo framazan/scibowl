@@ -9,6 +9,22 @@ export default function useThemePreference() {
     catch { return determineDark('system'); }
   });
 
+  // Cross-component sync: listen for and emit theme change events
+  React.useEffect(() => {
+    const onThemeChange = (e) => {
+      const detail = (e && e.detail) || {};
+      if (detail.pref === 'light' || detail.pref === 'dark' || detail.pref === 'system') {
+        // Avoid unnecessary updates
+        if (detail.pref !== themePref) setThemePref(detail.pref);
+      }
+      if (typeof detail.dark === 'boolean') {
+        if (detail.dark !== dark) setDark(detail.dark);
+      }
+    };
+    window.addEventListener('theme:change', onThemeChange);
+    return () => window.removeEventListener('theme:change', onThemeChange);
+  }, [themePref, dark]);
+
   // Load saved preference on mount
   React.useEffect(() => {
     let mounted = true;
@@ -38,6 +54,10 @@ export default function useThemePreference() {
   // Persist preference when it changes
   React.useEffect(() => {
     try { saveThemePreference(themePref); } catch {}
+    // Broadcast theme changes so other hook instances update immediately
+    try {
+      window.dispatchEvent(new CustomEvent('theme:change', { detail: { pref: themePref, dark: determineDark(themePref) } }));
+    } catch {}
   }, [themePref]);
 
   // Follow system changes when in system mode
@@ -53,6 +73,10 @@ export default function useThemePreference() {
   const setDarkExplicit = React.useCallback((next) => {
     setThemePref(next ? 'dark' : 'light');
     setDark(!!next);
+    // Ensure immediate cross-component propagation
+    try {
+      window.dispatchEvent(new CustomEvent('theme:change', { detail: { pref: next ? 'dark' : 'light', dark: !!next } }));
+    } catch {}
   }, []);
 
   return { themePref, setThemePref, dark, setDark: setDarkExplicit };

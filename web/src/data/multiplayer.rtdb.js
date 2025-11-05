@@ -19,7 +19,6 @@ function buzzesRef(roomId) { return ref(db(), `mp/roomBuzzes/${roomId}`); }
 function buzzListRef(roomId, questionId) { return ref(db(), `mp/roomBuzzes/${roomId}/${questionId}`); }
 function historyRef(roomId) { return ref(db(), `mp/roomHistory/${roomId}`); }
 function userRoomsRef(uid) { return ref(db(), `mp/userRooms/${uid}`); }
-
 async function touchRoom(roomId) {
   try { await update(roomRef(roomId), { lastActiveAt: Date.now() }); } catch {}
 }
@@ -30,7 +29,6 @@ function generateCode(len = 6) {
   for (let i = 0; i < len; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
   return out;
 }
-
 // Browser-friendly SHA-256 hex helper; falls back to plain string on failure
 async function sha256Hex(text) {
   try {
@@ -46,17 +44,22 @@ async function sha256Hex(text) {
 
 export async function createRoom({ name = 'Room', isPrivate = false, passcode = '' }) {
   // Simple client-side create; for private rooms, prefer server enforcement if needed
+  const roomName = String(name || 'Room').trim() || 'Room';
+  const pass = String(passcode || '').trim();
+  if (isPrivate && !pass) {
+    throw new Error('Passcode is required for private rooms');
+  }
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = generateCode();
     const rref = roomRef(code);
     const snap = await get(rref);
     if (snap.exists()) continue;
     let passHash = null;
-    if (isPrivate && passcode) {
-      try { passHash = await sha256Hex(passcode); } catch { passHash = String(passcode); }
+    if (isPrivate && pass) {
+      try { passHash = await sha256Hex(pass); } catch { passHash = pass; }
     }
     await set(rref, {
-      name,
+      name: roomName,
       isPrivate: !!isPrivate,
       status: 'open',
       createdAt: Date.now(),
@@ -370,6 +373,15 @@ export async function setMpBuzzerOpen({ roomId, open }) {
     if (st.stemFinishedAt && !st.choicesStartAt && Number(st.choicesBase || 0) < 4) {
       next.state.choicesStartAt = now;
     }
+    // If choices finished, (re)anchor a shared buzz window start if not already set.
+    // Determine default window based on currentId suffix (__tu__ / __bo__)
+    if (st.choicesFinishedAt && !st.buzzWindowStartAt) {
+      const qid = (data.game && data.game.currentId) || '';
+      const isBonus = /__bo__\d+$/i.test(String(qid));
+      const ms = isBonus ? 10000 : 4000;
+      next.state.buzzWindowMs = Number.isFinite(st.buzzWindowMs) && st.buzzWindowMs > 0 ? st.buzzWindowMs : ms;
+      next.state.buzzWindowStartAt = now;
+    }
     return next;
   });
 }
@@ -402,6 +414,7 @@ export async function attemptMpBuzz({ roomId, uid, displayName }) {
       const chInc = perChoice > 0 ? Math.floor(chElapsed / perChoice) : 0;
       const nextChoicesBase = Math.min(4, Math.max(0, Number(st.choicesBase || 0)) + Math.max(0, chInc));
 
+      const interrupt = !st.stemFinishedAt;
       const next = {
         ...data,
         state: {
@@ -415,8 +428,23 @@ export async function attemptMpBuzz({ roomId, uid, displayName }) {
           choicesStartAt: null,
           choicesBase: nextChoicesBase,
           currentBuzzKey: null,
+          // Start a synchronized per-buzz answer window (3s)
+          answerWindowUid: uid,
+          answerWindowStartAt: now,
+          answerWindowDeadlineAt: now + 3000,
+          answerWindowResolved: false,
+          currentBuzzInterrupt: !!interrupt,
         },
       };
+      // If non-interrupt, reset the shared buzz window for everyone else
+      if (!interrupt) {
+        next.state.buzzWindowStartAt = now;
+        if (!Number.isFinite(next.state.buzzWindowMs) || next.state.buzzWindowMs <= 0) {
+          const qid = (data.game && data.game.currentId) || '';
+          const isBonus = /__bo__\d+$/i.test(String(qid));
+          next.state.buzzWindowMs = isBonus ? 10000 : 4000;
+        }
+      }
       result = { ok: true, winnerUid: uid };
       return next;
     });
@@ -440,7 +468,16 @@ export async function attemptMpBuzz({ roomId, uid, displayName }) {
 }
 
 export async function clearMpBuzz({ roomId }) {
-  await update(roomRef(roomId), { 'state/winnerUid': null, 'state/winnerName': null, 'state/winnerAt': null });
+  await update(roomRef(roomId), {
+    'state/winnerUid': null,
+    'state/winnerName': null,
+    'state/winnerAt': null,
+    'state/answerWindowUid': null,
+    'state/answerWindowStartAt': null,
+    'state/answerWindowDeadlineAt': null,
+    'state/answerWindowResolved': null,
+    'state/currentBuzzInterrupt': null,
+  });
 }
 
 export async function setMpCurrentQuestion({ roomId, questionId, tournaments = [] }) {
@@ -461,6 +498,9 @@ export async function setMpCurrentQuestion({ roomId, questionId, tournaments = [
     };
     if (prevId) next.game.used[prevId] = true;
 
+    // Determine default buzz window duration from question id (__tu__/__bo__)
+    const isBonus = /__bo__\d+$/i.test(String(questionId || ''));
+    const buzzMs = isBonus ? 10000 : 4000;
     next.state = {
       ...(next.state || {}),
       // Reset buzzer and lockouts for new question
@@ -477,8 +517,17 @@ export async function setMpCurrentQuestion({ roomId, questionId, tournaments = [
       streamedWordsBase: 0,
       streamStartAt: null,
       stemFinishedAt: null,
+      choicesFinishedAt: null,
       choicesBase: 0,
       choicesStartAt: null,
+      // Timers
+      buzzWindowMs: buzzMs,
+      buzzWindowStartAt: null,
+      answerWindowUid: null,
+      answerWindowStartAt: null,
+      answerWindowDeadlineAt: null,
+      answerWindowResolved: null,
+      currentBuzzInterrupt: null,
     };
     return next;
   });
@@ -491,6 +540,23 @@ export async function setMpCurrentQuestion({ roomId, questionId, tournaments = [
   } catch {}
 }
 
+// Claim handling of an expired answer window to avoid double-processing across clients
+export async function claimAnswerTimeout({ roomId, uid }) {
+  let claimed = false;
+  await runTransaction(roomRef(roomId), (curr) => {
+    const data = curr || {};
+    const st = data.state || {};
+    const now = serverNow();
+    if (!st.answerWindowUid || st.answerWindowUid !== uid) return curr;
+    if (!st.answerWindowDeadlineAt || st.answerWindowResolved) return curr;
+    if (now < Number(st.answerWindowDeadlineAt)) return curr;
+    const next = { ...data, state: { ...st, answerWindowResolved: true } };
+    claimed = true;
+    return next;
+  });
+  return claimed;
+}
+
 // Set a shared timestamp when the stem first finishes on any client; no-op if already set
 export async function setStemFinishedAt({ roomId, at }) {
   const ts = Number(at || serverNow());
@@ -499,6 +565,17 @@ export async function setStemFinishedAt({ roomId, at }) {
     const st = data.state || {};
     if (st.stemFinishedAt) return curr;
     return { ...data, state: { ...st, stemFinishedAt: ts } };
+  });
+}
+
+// Set a shared timestamp when the choices are fully finished for the current question
+export async function setChoicesFinishedAt({ roomId, at }) {
+  const ts = Number(at || serverNow());
+  await runTransaction(roomRef(roomId), (curr) => {
+    const data = curr || {};
+    const st = data.state || {};
+    if (st.choicesFinishedAt) return curr;
+    return { ...data, state: { ...st, choicesFinishedAt: ts } };
   });
 }
 

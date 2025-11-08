@@ -156,6 +156,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
   const [showAnswer, setShowAnswer] = useState(false);
   const [bonusState, setBonusState] = useState(null); // {bonus, userAnswer, result, showAnswer}
   const [checking, setChecking] = useState(false);
+  const [checkingTarget, setCheckingTarget] = useState(null); // 'tossup' | 'bonus' | null
 
   // Determine preferred type for new questions based on current toggles and availability
   const preferredType = useMemo(() => {
@@ -205,6 +206,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
 
   async function check() {
     setChecking(true);
+    setCheckingTarget('tossup');
     try {
       let data;
       const isTossup = current?.question_type?.toLowerCase() === 'tossup';
@@ -243,6 +245,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
       setResult({ correct: false, reason: 'Check failed' });
     } finally {
       setChecking(false);
+      setCheckingTarget(null);
     }
   }
 
@@ -250,6 +253,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
   async function checkBonus() {
     if (!bonusState) return;
     setChecking(true);
+    setCheckingTarget('bonus');
     try {
       const bonusChoices = parseMCChoicesRG(bonusState.bonus);
       let data;
@@ -268,6 +272,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
       setBonusState(bs => ({ ...bs, result: { correct: false, reason: 'Check failed' } }));
     } finally {
       setChecking(false);
+      setCheckingTarget(null);
     }
   }
 
@@ -502,6 +507,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
             checkBonus={checkBonus}
             readingSpeed={readingSpeed}
             checking={checking}
+            checkingTarget={checkingTarget}
           />
         )}
         {previousQuestions.length > 0 && (
@@ -529,7 +535,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
   );
 }
 
-function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAnswer, setUserAnswer, mcTypedAnswer, setMcTypedAnswer, result, setResult, showAnswer, setShowAnswer, bonusState, setBonusState, check, checkBonus, readingSpeed, checking }) {
+function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAnswer, setUserAnswer, mcTypedAnswer, setMcTypedAnswer, result, setResult, showAnswer, setShowAnswer, bonusState, setBonusState, check, checkBonus, readingSpeed, checking, checkingTarget }) {
   const mcChoices = useMemo(() => parseMCChoicesRG(current), [current]);
   const [currentVisualUrl, setCurrentVisualUrl] = React.useState(null);
   const [showCurrentVisualFull, setShowCurrentVisualFull] = React.useState(false);
@@ -691,7 +697,7 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [buzzed, streamingActive, mcChoices.length, canAnswer, userAnswer, bonusState, mcTypedAnswer]);
+  }, [buzzed, streamingActive, mcChoices.length, canAnswer, userAnswer, bonusState, mcTypedAnswer, checking]);
 
   // Load visual image for current if it's a bonus and flagged as visual
   useEffect(() => {
@@ -874,7 +880,7 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
             {showAnswer ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
           <button
-            className="btn btn-ghost px-3 py-1.5 text-base"
+            className={`btn btn-ghost px-3 py-1.5 text-base ${checking ? 'bg-gray-200 text-gray-500 dark:bg-neutral-800 dark:text-gray-400 cursor-not-allowed' : ''}`}
             onClick={nextQuestion}
             disabled={checking}
             title={checking ? 'Please wait—checking in progress' : 'Next question'}
@@ -882,7 +888,7 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
             <SkipForward size={16} />
           </button>
         </div>
-        {checking ? (
+        {checking && checkingTarget === 'tossup' ? (
           <div className="mt-4 rounded-xl px-4 py-3 border bg-blue-100 text-blue-900 border-blue-200 dark:bg-blue-900/20 dark:text-blue-100 dark:border-blue-800 flex items-center gap-3">
             <DoubleHelix />
             <span className="font-medium">Checking answer...</span>
@@ -967,6 +973,12 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
                 {bonusState.showAnswer ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
+            {checking && checkingTarget === 'bonus' && (
+              <div className="mt-4 rounded-xl px-4 py-3 border bg-blue-100 text-blue-900 border-blue-200 dark:bg-blue-900/20 dark:text-blue-100 dark:border-blue-800 flex items-center gap-3">
+                <DoubleHelix />
+                <span className="font-medium">Checking answer...</span>
+              </div>
+            )}
             {bonusState.result && (
               <div
                 className={

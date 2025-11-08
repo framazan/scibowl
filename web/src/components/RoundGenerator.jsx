@@ -3,7 +3,7 @@ import { listSessionRoundsMeta, swapToIndex } from '../data/sessionRoundsCache.j
 import { AlertTriangle, Plus, Minus, FileDown, CloudCheck, Trash2, ChevronRight, ChevronUp, ChevronDown, ArrowUp, List, RefreshCw, FolderPlus, Pencil, Maximize2, Play } from 'lucide-react';
 import LatexRenderer from './LatexRenderer.jsx';
 import { getRoundsIndex, getRoundDetail, saveUserRound, buildExcludeSetFromRound, renameUserRound, syncUserRoundsCache, deleteUserRound, setUserRoundFolder, getRoundFolders, addRoundFolder, renameRoundFolder, deleteRoundFolder, claimSharedPresetRound } from '../data/rounds.firestore.js';
-import { unique, findBonus, parseMCChoices, categoryToCode, loadHtml2Pdf } from './roundGenerator/utils/helpers.js';
+import { unique, parseMCChoices, categoryToCode, loadHtml2Pdf } from './roundGenerator/utils/helpers.js';
 import { isVisualBonus } from '../data/visualBonuses.js';
 import TournamentSelector from './roundGenerator/components/TournamentSelector.jsx';
 import RoundRanges from './roundGenerator/components/RoundRanges.jsx';
@@ -19,6 +19,8 @@ import RoundPdfContent from './roundGenerator/components/RoundPdfContent.jsx';
 import SearchBar from './roundGenerator/components/SearchBar.jsx';
 import ScorekeeperPane from './roundGenerator/components/ScorekeeperPane.jsx';
 import SubstitutionModal from './roundGenerator/components/SubstitutionModal.jsx'; // New modal for structured player substitutions
+import Toasts from './roundGenerator/components/Toasts.jsx';
+import { computePairsUtil } from './roundGenerator/utils/computePairs.js';
 import { checkAnswerMC as apiCheckMC, checkAnswerBonus as apiCheckBonus } from '../api/client.js';
 import { useRoundSession } from '../context/RoundSessionContext.jsx';
 import useThemePreference from '../hooks/useThemePreference.js';
@@ -629,144 +631,19 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
   // user rounds loading now handled by useUserRounds
 
   function computePairs() {
-    // Build exclusion set from selected rounds
-    const excludeSet = new Set();
-  // ensure details are present (lazy fetch)
-  const needed = selectedExcludeRoundIds.filter(id => !excludeDetailCache.current.has(id));
-
-    // Note: computePairs can be sync; we won't fetch here to avoid async. Exclusion for newly selected ids will apply on next generate after fetch.
-    for (const id of selectedExcludeRoundIds) {
-      const detail = excludeDetailCache.current.get(id);
-      if (detail) {
-        const s = buildExcludeSetFromRound(detail);
-        for (const qid of s) excludeSet.add(qid);
-      }
-    }
-    // Helper: balanced sampling across categories
-  function balancedSample(all, desired) {
-      if (all.length === 0 || desired <= 0) return [];
-      // Determine which categories to use (respect selection but ignore ones with zero items)
-      const byCat = new Map();
-      for (const q of all) {
-        if (!byCat.has(q.category)) byCat.set(q.category, []);
-        byCat.get(q.category).push(q);
-      }
-      let cats = Array.from(byCat.keys());
-      if (selectedCategories.length) {
-        const setSel = new Set(selectedCategories);
-        cats = cats.filter(c => setSel.has(c));
-      }
-      // Remove empty categories (shouldn't exist) and sort for stability then shuffle for distributing remainders
-      cats = cats.filter(c => (byCat.get(c)?.length || 0) > 0);
-      if (cats.length === 0) return [];
-      const shuffledCats = [...cats].sort(() => Math.random() - 0.5);
-      const base = Math.floor(desired / shuffledCats.length);
-      let remainder = desired % shuffledCats.length;
-      const picks = [];
-      const usedIds = new Set();
-      // initial allocation
-      for (let i = 0; i < shuffledCats.length; i++) {
-        const cat = shuffledCats[i];
-        const list = [...byCat.get(cat)];
-        // shuffle list
-        list.sort(() => Math.random() - 0.5);
-        const need = Math.min(base + (remainder > 0 ? 1 : 0), list.length);
-        if (remainder > 0) remainder--;
-        for (let k = 0; k < need; k++) {
-          const q = list[k];
-          if (!usedIds.has(q.id)) {
-            picks.push(q); usedIds.add(q.id);
-          }
-        }
-      }
-      // If shortfall, fill with leftovers from any category
-      if (picks.length < desired) {
-        const leftovers = [];
-        for (const cat of cats) {
-          for (const q of byCat.get(cat)) if (!usedIds.has(q.id)) leftovers.push(q);
-        }
-        leftovers.sort(() => Math.random() - 0.5);
-        for (const q of leftovers) {
-          if (picks.length >= desired) break;
-          picks.push(q); usedIds.add(q.id);
-        }
-      }
-      return picks.slice(0, desired);
-    }
-
-    let pairs = [];
-  if (questionType === 'tossup') {
-      const pool = validQuestions.filter(q =>
-        (selectedTournaments.length ? selectedTournaments.includes(q.tournament) : true) &&
-        inRanges(q) &&
-        q.question_type?.toLowerCase() === 'tossup' &&
-        !excludeSet.has(q.id)
-      );
-      const picks = pool.length <= count ? [...pool] : balancedSample(pool, count);
-      // Shuffle final picks for display randomness (Fisher-Yates)
-      for (let i = picks.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [picks[i], picks[j]] = [picks[j], picks[i]];
-      }
-      pairs = picks.map(tossup => ({ tossup, bonus: null }));
-    } else if (questionType === 'bonus') {
-      const pool = validQuestions.filter(q =>
-        (selectedTournaments.length ? selectedTournaments.includes(q.tournament) : true) &&
-        inRanges(q) &&
-        q.question_type?.toLowerCase() === 'bonus' &&
-        // include visuals only if allowed in bonus-only mode
-        (allowVisualInBonusOnly ? true : !isVisualBonus(q)) &&
-        !excludeSet.has(q.id)
-      );
-      const picks = pool.length <= count ? [...pool] : balancedSample(pool, count);
-      for (let i = picks.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [picks[i], picks[j]] = [picks[j], picks[i]];
-      }
-      pairs = picks.map(bonus => ({ tossup: null, bonus }));
-    } else if (questionType === 'visual-bonus') {
-      // Visual bonuses only; use flags is_visual_bonus or visual=='true'
-      const pool = validQuestions.filter(q =>
-        (selectedTournaments.length ? selectedTournaments.includes(q.tournament) : true) &&
-        inRanges(q) &&
-        q.question_type?.toLowerCase() === 'bonus' &&
-        isVisualBonus(q) &&
-        !excludeSet.has(q.id)
-      );
-      const picks = pool.length <= count ? [...pool] : balancedSample(pool, count);
-      for (let i = picks.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [picks[i], picks[j]] = [picks[j], picks[i]];
-      }
-      pairs = picks.map(bonus => ({ tossup: null, bonus }));
-    } else {
-      // Both: balance based on tossups only; bonuses are paired when possible.
-      const tossupPoolRaw = validQuestions.filter(q =>
-        (selectedTournaments.length ? selectedTournaments.includes(q.tournament) : true) &&
-        inRanges(q) &&
-        q.question_type?.toLowerCase() === 'tossup' &&
-        !excludeSet.has(q.id)
-      );
-      // Only include tossups that have an eligible paired bonus (respect visual flag)
-      const tossupPool = tossupPoolRaw.filter(tu => {
-        const bonus = findBonus(tu, validQuestions);
-        if (!bonus) return false;
-        if (excludeSet.has(bonus.id)) return false;
-        if (!allowVisualInPairs && isVisualBonus(bonus)) return false;
-        return true;
-      });
-      const tossupPicks = tossupPool.length <= count ? [...tossupPool] : balancedSample(tossupPool, count);
-      for (let i = tossupPicks.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [tossupPicks[i], tossupPicks[j]] = [tossupPicks[j], tossupPicks[i]];
-      }
-      pairs = tossupPicks.map(tossup => {
-        const bonus = findBonus(tossup, validQuestions);
-        const finalBonus = (bonus && (allowVisualInPairs || !isVisualBonus(bonus)) && !excludeSet.has(bonus.id)) ? bonus : null;
-        return { tossup, bonus: finalBonus };
-      });
-    }
-    return pairs;
+    return computePairsUtil({
+      validQuestions,
+      selectedTournaments,
+      inRanges,
+      selectedCategories,
+      selectedExcludeRoundIds,
+      excludeDetailCache,
+      count,
+      questionType,
+      allowVisualInPairs,
+      allowVisualInBonusOnly,
+      buildExcludeSetFromRound,
+    });
   }
 
   // loadHtml2Pdf imported
@@ -1770,47 +1647,8 @@ export default function RoundGenerator({ questions = [], lazy = null, auth = nul
           </div>
         </div>
       )}
-      {/* Toasts */}
-      <div className="fixed top-4 right-4 z-[60] flex flex-col gap-3 w-[min(92vw,360px)] pointer-events-none">
-        {toasts.map(t => {
-          const pct = 0; // visual handled purely by CSS animation bar
-          return (
-            <div
-              key={t.id}
-              className={
-                'group pointer-events-auto relative overflow-hidden rounded-md px-4 py-3 pr-10 text-sm shadow-lg flex items-start gap-3 animate-toast-enter ' +
-                (t.type === 'success' ? 'bg-emerald-600 text-white' :
-                 t.type === 'error' ? 'bg-red-600 text-white' :
-                 'bg-neutral-800 text-white')
-              }
-              role="status"
-              aria-live="polite"
-            >
-              <div className="flex-1 break-words leading-relaxed">{t.message}</div>
-              <button
-                className="absolute top-1.5 right-1.5 rounded p-1 text-white/70 hover:text-white hover:bg-white/10 transition-colors"
-                aria-label="Dismiss notification"
-                onClick={() => setToasts(all => all.filter(x => x.id !== t.id))}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4"><path fillRule="evenodd" d="M4.22 4.22a.75.75 0 011.06 0L10 8.94l4.72-4.72a.75.75 0 111.06 1.06L11.06 10l4.72 4.72a.75.75 0 11-1.06 1.06L10 11.06l-4.72 4.72a.75.75 0 01-1.06-1.06L8.94 10 4.22 5.28a.75.75 0 010-1.06z" clipRule="evenodd" /></svg>
-              </button>
-              <span
-                className="absolute bottom-0 left-0 h-0.5 bg-white/70 group-hover:bg-white"
-                style={{
-                  width: '100%',
-                  transformOrigin: 'left',
-                  animation: `toast-bar-${t.id} ${t.ttl}ms linear forwards`
-                }}
-              />
-              <style>{`@keyframes toast-disappear { to { opacity:0; transform: translateY(-4px); } }
-                @keyframes toast-enter { from { opacity:0; transform: translateY(-4px) scale(.98); } to { opacity:1; transform: translateY(0) scale(1); } }
-                .animate-toast-enter { animation: toast-enter 160ms cubic-bezier(.4,0,.2,1); }
-              `}</style>
-              <style>{`@keyframes toast-bar-${t.id} { from { transform: scaleX(1); } to { transform: scaleX(0); } }`}</style>
-            </div>
-          );
-        })}
-      </div>
+      {/* Toasts: position just below the global header (if detected) */}
+      <Toasts toasts={toasts} headerOffset={headerOffset} onDismiss={(id)=>setToasts(t=>t.filter(x=>x.id!==id))} />
     </div>
     </div>
   );

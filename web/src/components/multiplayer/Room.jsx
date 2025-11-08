@@ -5,7 +5,7 @@ import useAuth from '../../data/useAuth.js';
 import Layout from '../layout/Layout.jsx';
 import Loading from '../layout/Loading.jsx';
 import { RoomSEO } from '../SEO.jsx';
-import { joinRoom as joinRoomRtdb, listenRoom as listenRoomRtdb, listenTyping as listenTypingRtdb, listenBuzzes as listenBuzzesRtdb, sendMessage as sendMessageRtdb, awardScore as awardScoreRtdb, setMpBuzzerOpen, attemptMpBuzz, clearMpBuzz, setMpCurrentQuestion, setAnswerStatus, mpLockoutUid, mpResetLockouts, setMpGrading, setStemFinishedAt, setChoicesFinishedAt, setAwaitNext, updateRoomSettings as updateRoomSettingsRtdb, removeMember as removeMemberRtdb, listenHistory as listenHistoryRtdb, claimAnswerTimeout } from '../../data/multiplayer.rtdb.js';
+import { joinRoom as joinRoomRtdb, listenRoom as listenRoomRtdb, listenTyping as listenTypingRtdb, listenBuzzes as listenBuzzesRtdb, sendMessage as sendMessageRtdb, awardScore as awardScoreRtdb, setMpBuzzerOpen, attemptMpBuzz, clearMpBuzz, setMpCurrentQuestion, setAnswerStatus, mpLockoutUid, mpResetLockouts, setMpGrading, setStemFinishedAt, setChoicesFinishedAt, setAwaitNext, updateRoomSettings as updateRoomSettingsRtdb, removeMember as removeMemberRtdb, listenHistory as listenHistoryRtdb, claimAnswerTimeout, resetBuzzWindowNow } from '../../data/multiplayer.rtdb.js';
 import { getCurrentIdentity, ensureGuestIdentity, setGuestUsername, clearGuestIdentity, getGuestIdentity } from '../../data/identity.js';
 import { serverNow } from '../../data/serverTime.js';
 import { checkAnswerMC as apiCheckMC, checkAnswerBonus as apiCheckBonus } from '../../api/client.js';
@@ -23,6 +23,9 @@ import QuestionPanel from './room/QuestionPanel.jsx';
 import BuzzList from './room/BuzzList.jsx';
 import HistoryPanel from './room/HistoryPanel.jsx';
 import ChatPanel from './room/ChatPanel.jsx';
+// New extracted hooks
+import useStreamingQuestion from './hooks/useStreamingQuestion.js';
+import useBuzzTimers from './hooks/useBuzzTimers.js';
 // Match PracticeMode animation
 function DoubleHelix() {
   return (
@@ -109,10 +112,31 @@ export default function MultiplayerRoom() {
   const [buzzesMap, setBuzzesMap] = useState({});
   const [answersMap, setAnswersMap] = useState({}); // { [questionId]: { [uid]: {status, text, ...} } }
   // Streaming states mimic PracticeMode
-  const [displayedWordCount, setDisplayedWordCount] = useState(0);
-  const [choiceStreamCount, setChoiceStreamCount] = useState(0);
-  const [revealChoicesAfterCheck, setRevealChoicesAfterCheck] = useState(false);
-  const [mcTypedAnswer, setMcTypedAnswer] = useState('');
+  // Streaming & MC answer typing now handled by useStreamingQuestion hook
+  const streaming = useStreamingQuestion({
+    room,
+    roomId,
+    currentQ,
+    parseMCChoicesRG,
+    setStemFinishedAt,
+    setChoicesFinishedAt,
+    resultBanner,
+  });
+  const {
+    displayedWordCount,
+    setDisplayedWordCount,
+    choiceStreamCount,
+    setChoiceStreamCount,
+    revealChoicesAfterCheck,
+    setRevealChoicesAfterCheck,
+    mcTypedAnswer,
+    setMcTypedAnswer,
+    streamFinished,
+    words,
+    plainQuestionText,
+    choices,
+    fullMcChoices,
+  } = streaming;
   // Local tick to refresh countdown UIs
   const [tick, setTick] = useState(0);
   // Removed userAnswer state (radio MC)
@@ -375,25 +399,10 @@ export default function MultiplayerRoom() {
   }, [roomId]);
 
   // Derived streaming helpers
-  const plainQuestionText = useMemo(() => String(currentQ?.question || currentQ?.text || ''), [currentQ?.id]);
-  const words = useMemo(() => plainQuestionText.split(/\s+/).filter(Boolean), [plainQuestionText]);
-  const streamFinished = displayedWordCount >= words.length;
   const isBonusCurrent = String(currentQ?.question_type || '').toLowerCase() === 'bonus';
-  const choices = useMemo(() => parseMCChoicesRG(currentQ), [currentQ?.id]);
-  const fullMcChoices = useMemo(() => {
-    if (!Array.isArray(choices) || choices.length === 0) return [];
-    const map = new Map(choices);
-    return ['w','x','y','z'].map(k => [k, map.get(k)]);
-  }, [choices]);
 
-  // Reset streaming when question changes
-  useEffect(() => {
-  setDisplayedWordCount(0);
-  setChoiceStreamCount(0);
-  setRevealChoicesAfterCheck(false);
-  setMcTypedAnswer('');
-  setResultBanner(null);
-  }, [currentQ?.id]);
+  // When question changes, clear grading banner; streaming hook resets its own internals
+  useEffect(() => { setResultBanner(null); }, [currentQ?.id]);
 
   // Space to buzz; 'p' to pause/resume (when not typing)
   useEffect(() => {
@@ -501,117 +510,16 @@ export default function MultiplayerRoom() {
     return () => window.removeEventListener('keydown', handler);
   }, [currentQ?.id]);
 
-  // Stream words based on server-anchored room state for consistent pacing across clients
-  useEffect(() => {
-    if (!currentQ) return;
-    const perWordMs = Number(room?.state?.perWordMs || 200);
-    const base = Number(room?.state?.streamedWordsBase || 0);
-    const startAt = Number(room?.state?.streamStartAt || 0) || null;
-
-    let raf = null;
-    let iv = null;
-    const tick = () => {
-      const now = serverNow();
-      const inc = startAt ? Math.max(0, Math.floor((now - startAt) / Math.max(1, perWordMs))) : 0;
-      const next = Math.min(words.length, base + inc);
-      // If a correct answer occurred, reveal the full stem immediately for everyone
-      if (room?.state?.awaitNext) {
-        setDisplayedWordCount(words.length);
-      } else {
-        setDisplayedWordCount(next);
-      }
-    };
-
-    // Update at ~60fps when running, else compute one-off frozen value
-    if (!room?.state?.awaitNext && room?.state?.buzzerOpen && !room?.state?.winnerUid) {
-      iv = setInterval(tick, 80);
-      tick();
-    } else {
-      tick();
-    }
-    return () => { if (iv) clearInterval(iv); if (raf) cancelAnimationFrame(raf); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentQ?.id, words.length, room?.state?.buzzerOpen, room?.state?.winnerUid, room?.state?.perWordMs, room?.state?.streamedWordsBase, room?.state?.streamStartAt, room?.state?.awaitNext]);
-
-  // Align MC choices start using stemFinishedAt; stream choices gradually; pause while buzz is active
-  useEffect(() => {
-    if (!currentQ) return;
-    if (choices.length === 0) return;
-    if (!streamFinished) return;
-
-    const perChoiceMs = Number(room?.state?.perChoiceMs || 400);
-    const stemFinishedAt = Number(room?.state?.stemFinishedAt || 0);
-    if (!stemFinishedAt) return; // wait until we record finish time
-
-    // If a correct answer occurred, reveal all choices immediately for everyone
-    if (room?.state?.awaitNext) {
-      if (choiceStreamCount < 4) setChoiceStreamCount(4);
-      return;
-    }
-
-    // Stream choices from current position at a fixed interval
-    if (room?.state?.winnerUid || !room?.state?.buzzerOpen || choiceStreamCount >= 4) return;
-    const id = setInterval(() => {
-      setChoiceStreamCount(n => Math.min(4, n + 1));
-    }, perChoiceMs);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentQ?.id, choices.length, streamFinished, room?.state?.winnerUid, room?.state?.buzzerOpen, room?.state?.perChoiceMs, room?.state?.stemFinishedAt, room?.state?.awaitNext, choiceStreamCount]);
-
-  // After a check, quickly reveal remaining choices
-  useEffect(() => {
-    if (!currentQ) return;
-    if (choices.length === 0) return;
-    if (!resultBanner) return;
-    // Only reveal remaining choices quickly on CORRECT results; on incorrect, keep streaming normally
-    if (!resultBanner.correct) return;
-    if (choiceStreamCount >= 4) return;
-    if (!revealChoicesAfterCheck) setRevealChoicesAfterCheck(true);
-    const id = setInterval(() => setChoiceStreamCount(n => (n < 4 ? n + 1 : 4)), 150);
-    return () => clearInterval(id);
-  }, [resultBanner, currentQ?.id, choices.length, choiceStreamCount, revealChoicesAfterCheck]);
-
-  // Record a shared stemFinishedAt once when stem completes, to anchor choices across clients
-  useEffect(() => {
-    if (!currentQ) return;
-    if (!streamFinished) return;
-    if (room?.state?.stemFinishedAt) return;
-    // Write once if missing; races are benign
-    (async () => {
-      try { await setStemFinishedAt({ roomId, at: serverNow() }); } catch {}
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamFinished, currentQ?.id, !!room?.state?.stemFinishedAt]);
-
-  // Record a shared choicesFinishedAt once when all choices have streamed (or no choices exist)
-  useEffect(() => {
-    if (!currentQ) return;
-    if (!streamFinished) return; // wait for stem to finish first
-    if (room?.state?.choicesFinishedAt) return;
-    const hasChoices = Array.isArray(choices) && choices.length > 0;
-    const choicesDone = !hasChoices || choiceStreamCount >= 4;
-    if (!choicesDone) return;
-    (async () => {
-      try { await setChoicesFinishedAt({ roomId, at: serverNow() }); } catch {}
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentQ?.id, streamFinished, choiceStreamCount, !!room?.state?.choicesFinishedAt]);
+  // (Streaming effects moved into useStreamingQuestion hook)
 
   // Derived timers
-  const buzzWindowMs = Number(room?.state?.buzzWindowMs || 0) || 0;
-  const buzzWindowStartAt = Number(room?.state?.buzzWindowStartAt || 0) || 0;
-  const buzzWindowRemainingMs = useMemo(() => {
-    if (!buzzWindowMs || !buzzWindowStartAt) return null;
-    const rem = buzzWindowMs - Math.max(0, serverNow() - buzzWindowStartAt);
-    return Math.max(0, rem);
-  }, [buzzWindowMs, buzzWindowStartAt, tick]);
-
-  const answerWindowUid = room?.state?.answerWindowUid || null;
-  const answerDeadlineAt = Number(room?.state?.answerWindowDeadlineAt || 0) || 0;
-  const answerWindowRemainingMs = useMemo(() => {
-    if (!answerWindowUid || !answerDeadlineAt) return null;
-    return Math.max(0, answerDeadlineAt - serverNow());
-  }, [answerWindowUid, answerDeadlineAt, tick]);
+  // Buzz & answer timers derived via hook
+  const {
+    buzzWindowRemainingMs,
+    answerWindowUid,
+    answerWindowDeadlineAt,
+    answerWindowRemainingMs,
+  } = useBuzzTimers({ room, roomId, currentQ, setMpBuzzerOpen, resetBuzzWindowNow });
 
   // Auto-close buzzer when shared buzz window expires (no active winner)
   useEffect(() => {
@@ -619,19 +527,13 @@ export default function MultiplayerRoom() {
     if (!room?.state?.buzzerOpen) return;
     if (room?.state?.winnerUid) return;
     if (room?.state?.awaitNext) return;
-    if (buzzWindowRemainingMs === null) return;
-    if (buzzWindowRemainingMs > 0) return;
+    if (buzzWindowRemainingMs === null) return; // not anchored yet
+    if (buzzWindowRemainingMs > 0) return; // still time left
     (async () => { try { await setMpBuzzerOpen({ roomId, open: false }); } catch {} })();
   }, [buzzWindowRemainingMs, !!currentQ, room?.state?.buzzerOpen, room?.state?.winnerUid, room?.state?.awaitNext]);
 
   // Ensure buzz window start is anchored as soon as choices finish (if buzzer is open)
-  useEffect(() => {
-    if (!currentQ) return;
-    if (!room?.state?.buzzerOpen) return;
-    if (!room?.state?.choicesFinishedAt) return;
-    if (room?.state?.buzzWindowStartAt) return;
-    (async () => { try { await setMpBuzzerOpen({ roomId, open: true }); } catch {} })();
-  }, [!!currentQ, room?.state?.buzzerOpen, room?.state?.choicesFinishedAt, room?.state?.buzzWindowStartAt]);
+  // (Buzz window anchoring handled inside useBuzzTimers hook)
 
   // Auto-handle answer timeout after 3s if winner hasn't submitted
   useEffect(() => {
@@ -904,12 +806,26 @@ export default function MultiplayerRoom() {
       }
 
     if (result.correct) {
-      // Don't auto-advance; set awaiting-next flag
+      // Correct toss-up or bonus: wait for manual advance
       await setAwaitNext({ roomId, value: true });
     } else {
+      // Incorrect attempt: lock out ONLY this uid and reopen buzzer so someone else can buzz.
       await mpLockoutUid({ roomId, uid });
       await clearMpBuzz({ roomId });
-      await setMpBuzzerOpen({ roomId, open: true });
+      // TIMER RULE ADJUSTMENTS:
+      // 1. If the question has NOT finished streaming (choicesFinishedAt absent), we simply reopen
+      //    the buzzer without anchoring a timer yet (interrupt case unaffected).
+      // 2. If streaming IS complete (choicesFinishedAt present), we reset the buzz window to a
+      //    5 second rebound window for remaining players.
+      const streamingDone = !!room?.state?.choicesFinishedAt; // stem + choices complete
+      if (streamingDone) {
+        // resetBuzzWindowNow will now shorten toss-up rebound windows to 5s (multiplayer.rtdb logic)
+        await resetBuzzWindowNow({ roomId });
+        await setMpBuzzerOpen({ roomId, open: true });
+      } else {
+        // Interrupt before stem finished: just reopen buzzer; timer anchors later post-stream.
+        await setMpBuzzerOpen({ roomId, open: true });
+      }
     }
   }
 
@@ -941,7 +857,7 @@ export default function MultiplayerRoom() {
                   isPaused={!room?.state?.buzzerOpen}
                   winnerActive={room?.state?.winnerUid}
                   buzzWindowRemainingMs={buzzWindowRemainingMs}
-                  showBuzzTimer={!!currentQ && !!room?.state?.buzzerOpen && !!room?.state?.choicesFinishedAt && !room?.state?.winnerUid && !room?.state?.awaitNext && buzzWindowRemainingMs !== null}
+                  showBuzzTimer={!!currentQ && !!room?.state?.buzzerOpen && !!room?.state?.choicesFinishedAt && !room?.state?.winnerUid && !room?.state?.awaitNext && !room?.state?.grading && buzzWindowRemainingMs !== null}
                 />
                 {questionError && <div className="text-sm text-red-600">{questionError}</div>}
                 <QuestionPanel

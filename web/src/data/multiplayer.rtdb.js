@@ -373,17 +373,61 @@ export async function setMpBuzzerOpen({ roomId, open }) {
     if (st.stemFinishedAt && !st.choicesStartAt && Number(st.choicesBase || 0) < 4) {
       next.state.choicesStartAt = now;
     }
-    // If choices finished, (re)anchor a shared buzz window start if not already set.
-    // Determine default window based on currentId suffix (__tu__ / __bo__)
-    if (st.choicesFinishedAt && !st.buzzWindowStartAt) {
+    // IMPORTANT TIMER CHANGE:
+    // Do NOT anchor buzzWindowStartAt here anymore. We only start the shared buzz window
+    // AFTER streaming is fully complete (stem + choices). This prevents the timer from
+    // starting early due to interrupts or partial question reads.
+    // The anchoring now occurs explicitly when choicesFinishedAt is first set OR via
+    // resetBuzzWindowNow on post-stream incorrect answers.
+    // (legacy logic removed)
+    return next;
+  });
+}
+
+// Reset the shared buzz window start to "now" (only if choices are finished),
+// so a fresh window is available for a rebound attempt after an incorrect answer.
+export async function resetBuzzWindowNow({ roomId }) {
+  const now = serverNow();
+  await runTransaction(roomRef(roomId), (curr) => {
+    const data = curr || {};
+    const st = data.state || {};
+    // Only reset when choices have finished streaming for the current question
+    if (!st.choicesFinishedAt) return curr;
+    const next = { ...data, state: { ...st } };
+    next.state.buzzWindowStartAt = now;
+    // If original duration missing, infer from question id.
+    if (!Number.isFinite(next.state.buzzWindowMs) || next.state.buzzWindowMs <= 0) {
       const qid = (data.game && data.game.currentId) || '';
       const isBonus = /__bo__\d+$/i.test(String(qid));
-      const ms = isBonus ? 10000 : 4000;
-      next.state.buzzWindowMs = Number.isFinite(st.buzzWindowMs) && st.buzzWindowMs > 0 ? st.buzzWindowMs : ms;
-      next.state.buzzWindowStartAt = now;
+      next.state.buzzWindowMs = isBonus ? 10000 : 4000;
+    }
+    // NEW RULE: If this reset occurs after a fully streamed question (i.e., the timer was
+    // already running and an incorrect answer happened AFTER streaming completed), we set
+    // a rebound window of exactly 5000ms regardless of original duration for toss-ups.
+    // Bonus questions retain their original longer window.
+    const qid = (data.game && data.game.currentId) || '';
+    const isBonus = /__bo__\d+$/i.test(String(qid));
+    if (!isBonus) {
+      // For toss-ups only, apply 5s rebound logic.
+      // Detect that we are in a post-stream incorrect scenario by checking winnerUid is null
+      // (buzzer reopened) and answerWindowResolved was set previously.
+      // Since resetBuzzWindowNow is invoked right after an incorrect answer grading,
+      // we approximate by shortening when we already had a buzzWindowStartAt earlier.
+      if (st.buzzWindowStartAt) {
+        next.state.buzzWindowMs = 5000; // 5 seconds rebound window
+      }
     }
     return next;
   });
+}
+
+// Mark whether a rebound (second buzz attempt after an incorrect interrupt) is available.
+export async function setReboundAvailable({ roomId, value }) {
+  if (!roomId) return false;
+  try {
+    await update(roomRef(roomId), { 'state/reboundAvailable': !!value });
+    return true;
+  } catch { return false; }
 }
 
 // Toggle shared grading state so all clients can show a consistent animation
@@ -436,15 +480,9 @@ export async function attemptMpBuzz({ roomId, uid, displayName }) {
           currentBuzzInterrupt: !!interrupt,
         },
       };
-      // If non-interrupt, reset the shared buzz window for everyone else
-      if (!interrupt) {
-        next.state.buzzWindowStartAt = now;
-        if (!Number.isFinite(next.state.buzzWindowMs) || next.state.buzzWindowMs <= 0) {
-          const qid = (data.game && data.game.currentId) || '';
-          const isBonus = /__bo__\d+$/i.test(String(qid));
-          next.state.buzzWindowMs = isBonus ? 10000 : 4000;
-        }
-      }
+      // Do NOT set buzzWindowStartAt here. The window should only start when choices finish
+      // (anchored by setMpBuzzerOpen when st.choicesFinishedAt is present), or explicitly
+      // reset via resetBuzzWindowNow() after an incorrect answer.
       result = { ok: true, winnerUid: uid };
       return next;
     });

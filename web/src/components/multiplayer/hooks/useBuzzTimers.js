@@ -1,20 +1,19 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { serverNow } from '../../../data/serverTime.js';
 
 /**
  * Derives buzz/answer window timers and anchors initial buzz window
  * only after streaming fully completes (choicesFinishedAt present).
  */
-export default function useBuzzTimers({ room, roomId, currentQ, setMpBuzzerOpen, resetBuzzWindowNow }) {
-  // Anchor initial buzz window precisely when choices finished
+export default function useBuzzTimers({ room, roomId, currentQ }) {
+  // Local tick to drive countdown re-computation
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    if (!room?.state?.buzzerOpen) return;
-    if (!room?.state?.choicesFinishedAt) return; // not fully streamed yet
-    if (room?.state?.buzzWindowStartAt) return; // already anchored
-    // Explicitly anchor/reset now (includes duration policy inside)
-    resetBuzzWindowNow({ roomId, qid: currentQ?.id });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room?.state?.buzzerOpen, room?.state?.choicesFinishedAt, currentQ?.id]);
+    const id = setInterval(() => setTick(t => (t + 1) % 1_000_000), 200);
+    return () => clearInterval(id);
+  }, []);
+  // Buzz window anchoring occurs when choicesFinishedAt is first set (in RTDB).
+  // This hook only derives countdowns.
 
   // Derive timer remaining for buzz window
   const buzzWindowRemainingMs = useMemo(() => {
@@ -23,16 +22,19 @@ export default function useBuzzTimers({ room, roomId, currentQ, setMpBuzzerOpen,
     if (!start || !ms) return null;
     const now = serverNow();
     return Math.max(0, start + ms - now);
-  }, [room?.state?.buzzWindowStartAt, room?.state?.buzzWindowMs, room?.state?.winnerUid]);
+  }, [room?.state?.buzzWindowStartAt, room?.state?.buzzWindowMs, room?.state?.winnerUid, tick]);
 
   // Derive timer remaining for answer window
   const answerWindowDeadlineAt = Number(room?.state?.answerWindowDeadlineAt || 0) || null;
   const answerWindowUid = room?.state?.answerWindowUid || null;
+  const answerWindowResolved = !!room?.state?.answerWindowResolved;
+  const isGrading = !!room?.state?.grading;
   const answerWindowRemainingMs = useMemo(() => {
     if (!answerWindowDeadlineAt) return null;
+    if (answerWindowResolved || isGrading) return null;
     const now = serverNow();
     return Math.max(0, answerWindowDeadlineAt - now);
-  }, [answerWindowDeadlineAt, room?.state?.winnerUid]);
+  }, [answerWindowDeadlineAt, room?.state?.winnerUid, tick, answerWindowResolved, isGrading]);
 
   return {
     buzzWindowRemainingMs,

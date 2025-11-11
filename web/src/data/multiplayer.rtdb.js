@@ -373,13 +373,15 @@ export async function setMpBuzzerOpen({ roomId, open }) {
     if (st.stemFinishedAt && !st.choicesStartAt && Number(st.choicesBase || 0) < 4) {
       next.state.choicesStartAt = now;
     }
-    // IMPORTANT TIMER CHANGE:
-    // Do NOT anchor buzzWindowStartAt here anymore. We only start the shared buzz window
-    // AFTER streaming is fully complete (stem + choices). This prevents the timer from
-    // starting early due to interrupts or partial question reads.
-    // The anchoring now occurs explicitly when choicesFinishedAt is first set OR via
-    // resetBuzzWindowNow on post-stream incorrect answers.
-    // (legacy logic removed)
+    // TIMER ANCHORING RULE:
+    // Never (re)anchor the buzz window on open. It is only anchored once when
+    // streaming fully completes (choicesFinishedAt set) for a given question.
+    // If we are reopening BEFORE streaming completes (e.g. after an incorrect interrupt
+    // while stem or choices still streaming), proactively clear any premature anchor
+    // so the timer cannot run early.
+    if (!st.choicesFinishedAt && st.buzzWindowStartAt) {
+      next.state.buzzWindowStartAt = null; // remove early anchor
+    }
     return next;
   });
 }
@@ -399,7 +401,7 @@ export async function resetBuzzWindowNow({ roomId }) {
     if (!Number.isFinite(next.state.buzzWindowMs) || next.state.buzzWindowMs <= 0) {
       const qid = (data.game && data.game.currentId) || '';
       const isBonus = /__bo__\d+$/i.test(String(qid));
-      next.state.buzzWindowMs = isBonus ? 10000 : 4000;
+      next.state.buzzWindowMs = isBonus ? 20000 : 4000;
     }
     // NEW RULE: If this reset occurs after a fully streamed question (i.e., the timer was
     // already running and an incorrect answer happened AFTER streaming completed), we set
@@ -413,7 +415,7 @@ export async function resetBuzzWindowNow({ roomId }) {
       // (buzzer reopened) and answerWindowResolved was set previously.
       // Since resetBuzzWindowNow is invoked right after an incorrect answer grading,
       // we approximate by shortening when we already had a buzzWindowStartAt earlier.
-      if (st.buzzWindowStartAt) {
+      if (st.streamStartAt) {
         next.state.buzzWindowMs = 5000; // 5 seconds rebound window
       }
     }
@@ -432,10 +434,89 @@ export async function setReboundAvailable({ roomId, value }) {
 
 // Toggle shared grading state so all clients can show a consistent animation
 export async function setMpGrading({ roomId, grading }) {
-  await update(roomRef(roomId), { 'state/grading': !!grading });
+  if (!roomId) return false;
+  try {
+    await update(roomRef(roomId), { 'state/grading': !!grading });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-export async function attemptMpBuzz({ roomId, uid, displayName }) {
+export async function resolveAnswerWindow({ roomId }) {
+  if (!roomId) return false;
+  try {
+    await update(roomRef(roomId), {
+      'state/answerWindowResolved': true,
+      'state/answerWindowDeadlineAt': null,
+      'state/answerWindowStartAt': null,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function updateStreamingSpeed({ roomId, wordsPerSecond }) {
+  if (!roomId) return false;
+  const target = Math.min(12, Math.max(1, Math.round(Number(wordsPerSecond) || 1)));
+  const perWordMs = Math.max(60, Math.round(1000 / target));
+  const perChoiceMs = Math.max(40, Math.round(perWordMs * 2));
+  const now = serverNow();
+
+  await runTransaction(roomRef(roomId), (curr) => {
+    if (!curr) return curr;
+    const data = curr || {};
+    const st = data.state || {};
+    const next = { ...data, state: { ...st } };
+
+    const prevPerWord = Number(st.perWordMs || 0) || 0;
+    const baseWords = Math.max(0, Number(st.streamedWordsBase || 0));
+    let nextWordsBase = baseWords;
+    let nextStreamStartAt = st.streamStartAt || null;
+
+    if (st.buzzerOpen && st.streamStartAt && prevPerWord > 0) {
+      const elapsed = Math.max(0, now - Number(st.streamStartAt));
+      const increment = Math.max(0, Math.floor(elapsed / prevPerWord));
+      if (increment > 0) nextWordsBase = baseWords + increment;
+      nextStreamStartAt = now;
+    }
+
+    const prevPerChoice = Number(st.perChoiceMs || 0) || 0;
+    const baseChoices = Math.max(0, Number(st.choicesBase || 0));
+    let nextChoicesBase = baseChoices;
+    if (st.choicesStartAt && prevPerChoice > 0) {
+      const elapsedChoices = Math.max(0, now - Number(st.choicesStartAt));
+      const incChoices = Math.max(0, Math.floor(elapsedChoices / prevPerChoice));
+      if (incChoices > 0) nextChoicesBase = Math.min(4, baseChoices + incChoices);
+    }
+
+    let nextChoicesStartAt = st.choicesStartAt || null;
+    if (st.choicesStartAt) {
+      if (!st.buzzerOpen || nextChoicesBase >= 4) {
+        nextChoicesStartAt = null;
+      } else {
+        nextChoicesStartAt = now;
+      }
+    } else if (st.buzzerOpen && st.stemFinishedAt && nextChoicesBase < 4) {
+      nextChoicesStartAt = now;
+    } else {
+      nextChoicesStartAt = null;
+    }
+
+    next.state.perWordMs = perWordMs;
+    next.state.perChoiceMs = perChoiceMs;
+    next.state.streamedWordsBase = nextWordsBase;
+    next.state.streamStartAt = nextStreamStartAt;
+    next.state.choicesBase = nextChoicesBase;
+    next.state.choicesStartAt = nextChoicesStartAt;
+
+    return next;
+  });
+  return true;
+}
+
+export async function attemptMpBuzz({ roomId, uid, displayName, answerWindowMs }) {
   const sref = roomRef(roomId);
   try {
     let result = { ok: false };
@@ -459,6 +540,7 @@ export async function attemptMpBuzz({ roomId, uid, displayName }) {
       const nextChoicesBase = Math.min(4, Math.max(0, Number(st.choicesBase || 0)) + Math.max(0, chInc));
 
       const interrupt = !st.stemFinishedAt;
+      const answerMs = Number.isFinite(answerWindowMs) && answerWindowMs > 0 ? Math.floor(answerWindowMs) : 8000;
       const next = {
         ...data,
         state: {
@@ -472,10 +554,10 @@ export async function attemptMpBuzz({ roomId, uid, displayName }) {
           choicesStartAt: null,
           choicesBase: nextChoicesBase,
           currentBuzzKey: null,
-          // Start a synchronized per-buzz answer window (3s)
+          // Start a synchronized per-buzz answer window (default 8s)
           answerWindowUid: uid,
           answerWindowStartAt: now,
-          answerWindowDeadlineAt: now + 3000,
+          answerWindowDeadlineAt: now + answerMs,
           answerWindowResolved: false,
           currentBuzzInterrupt: !!interrupt,
         },
@@ -523,6 +605,7 @@ export async function setMpCurrentQuestion({ roomId, questionId, tournaments = [
   await runTransaction(roomRef(roomId), (curr) => {
     const data = curr || {};
     const game = data.game || {};
+    const st = data.state || {};
     const prevId = game.currentId || null;
     prevIdCaptured = prevId;
     const used = (game.used && typeof game.used === 'object') ? game.used : {};
@@ -538,7 +621,11 @@ export async function setMpCurrentQuestion({ roomId, questionId, tournaments = [
 
     // Determine default buzz window duration from question id (__tu__/__bo__)
     const isBonus = /__bo__\d+$/i.test(String(questionId || ''));
-    const buzzMs = isBonus ? 10000 : 4000;
+    const buzzMs = isBonus ? 20000 : 4000;
+    const prevPerWord = Number(st.perWordMs);
+    const prevPerChoice = Number(st.perChoiceMs);
+    const nextPerWord = Number.isFinite(prevPerWord) && prevPerWord >= 60 ? Math.floor(prevPerWord) : 200;
+    const nextPerChoice = Number.isFinite(prevPerChoice) && prevPerChoice >= 40 ? Math.floor(prevPerChoice) : 400;
     next.state = {
       ...(next.state || {}),
       // Reset buzzer and lockouts for new question
@@ -550,14 +637,15 @@ export async function setMpCurrentQuestion({ roomId, questionId, tournaments = [
       currentBuzzKey: null,
       lockedOut: null,
       // Initialize streaming sync fields
-      perWordMs: 200,
-      perChoiceMs: 400,
+  perWordMs: nextPerWord,
+  perChoiceMs: nextPerChoice,
       streamedWordsBase: 0,
       streamStartAt: null,
       stemFinishedAt: null,
       choicesFinishedAt: null,
       choicesBase: 0,
       choicesStartAt: null,
+      timerExpiredAt: null,
       // Timers
       buzzWindowMs: buzzMs,
       buzzWindowStartAt: null,
@@ -578,6 +666,33 @@ export async function setMpCurrentQuestion({ roomId, questionId, tournaments = [
   } catch {}
 }
 
+// Explicitly clear the shared buzz timer anchor so the timer is hidden and idle
+// until the next question completes streaming. Safe to call before/after
+// switching questions; it only affects the anchor, not durations.
+export async function resetBuzzTimerForNewQuestion({ roomId }) {
+  if (!roomId) return false;
+  try {
+    await update(roomRef(roomId), { 'state/buzzWindowStartAt': null });
+    return true;
+  } catch { return false; }
+}
+
+// Mark the current question's timer as expired so all clients can display "Time's up"
+export async function setTimerExpired({ roomId, questionId, at }) {
+  const ts = Number(at || serverNow());
+  await runTransaction(roomRef(roomId), (curr) => {
+    const data = curr || {};
+    const st = data.state || {};
+    const qid = data?.game?.currentId || null;
+    if (questionId && questionId !== qid) return curr;
+    if (st.timerExpiredAt) return curr;
+    const next = { ...data, state: { ...st, timerExpiredAt: ts } };
+    // Ensure buzzer closes if still open when the timer expires
+    next.state.buzzerOpen = false;
+    return next;
+  });
+}
+
 // Claim handling of an expired answer window to avoid double-processing across clients
 export async function claimAnswerTimeout({ roomId, uid }) {
   let claimed = false;
@@ -596,24 +711,40 @@ export async function claimAnswerTimeout({ roomId, uid }) {
 }
 
 // Set a shared timestamp when the stem first finishes on any client; no-op if already set
-export async function setStemFinishedAt({ roomId, at }) {
+export async function setStemFinishedAt({ roomId, questionId, at }) {
   const ts = Number(at || serverNow());
   await runTransaction(roomRef(roomId), (curr) => {
     const data = curr || {};
     const st = data.state || {};
+    const qid = data?.game?.currentId || null;
+    if (questionId && questionId !== qid) return curr;
     if (st.stemFinishedAt) return curr;
     return { ...data, state: { ...st, stemFinishedAt: ts } };
   });
 }
 
 // Set a shared timestamp when the choices are fully finished for the current question
-export async function setChoicesFinishedAt({ roomId, at }) {
+export async function setChoicesFinishedAt({ roomId, questionId, at }) {
   const ts = Number(at || serverNow());
   await runTransaction(roomRef(roomId), (curr) => {
     const data = curr || {};
     const st = data.state || {};
+    const qid = data?.game?.currentId || null;
+    if (questionId && questionId !== qid) return curr;
     if (st.choicesFinishedAt) return curr;
-    return { ...data, state: { ...st, choicesFinishedAt: ts } };
+    const next = { ...data, state: { ...st, choicesFinishedAt: ts } };
+    // Anchor shared buzz window exactly at streaming completion time
+    // Only if not already anchored for this question
+    if (!st.buzzWindowStartAt) {
+      next.state.buzzWindowStartAt = ts;
+      // Ensure duration exists (should be set on setMpCurrentQuestion)
+      if (!Number.isFinite(next.state.buzzWindowMs) || next.state.buzzWindowMs <= 0) {
+        const qid = (data.game && data.game.currentId) || '';
+        const isBonus = /__bo__\d+$/i.test(String(qid));
+        next.state.buzzWindowMs = isBonus ? 20000 : 4000;
+      }
+    }
+    return next;
   });
 }
 

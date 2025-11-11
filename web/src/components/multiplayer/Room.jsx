@@ -5,7 +5,7 @@ import useAuth from '../../data/useAuth.js';
 import Layout from '../layout/Layout.jsx';
 import Loading from '../layout/Loading.jsx';
 import { RoomSEO } from '../SEO.jsx';
-import { joinRoom as joinRoomRtdb, listenRoom as listenRoomRtdb, listenTyping as listenTypingRtdb, listenBuzzes as listenBuzzesRtdb, sendMessage as sendMessageRtdb, awardScore as awardScoreRtdb, setMpBuzzerOpen, attemptMpBuzz, clearMpBuzz, setMpCurrentQuestion, setAnswerStatus, mpLockoutUid, mpResetLockouts, setMpGrading, setStemFinishedAt, setChoicesFinishedAt, setAwaitNext, updateRoomSettings as updateRoomSettingsRtdb, removeMember as removeMemberRtdb, listenHistory as listenHistoryRtdb, claimAnswerTimeout, resetBuzzWindowNow } from '../../data/multiplayer.rtdb.js';
+import { joinRoom as joinRoomRtdb, listenRoom as listenRoomRtdb, listenTyping as listenTypingRtdb, listenBuzzes as listenBuzzesRtdb, sendMessage as sendMessageRtdb, awardScore as awardScoreRtdb, setMpBuzzerOpen, attemptMpBuzz, clearMpBuzz, setMpCurrentQuestion, setAnswerStatus, mpLockoutUid, mpResetLockouts, setMpGrading, setStemFinishedAt, setChoicesFinishedAt, setAwaitNext, updateRoomSettings as updateRoomSettingsRtdb, removeMember as removeMemberRtdb, listenHistory as listenHistoryRtdb, claimAnswerTimeout, resetBuzzWindowNow, setTimerExpired, resolveAnswerWindow, updateStreamingSpeed } from '../../data/multiplayer.rtdb.js';
 import { getCurrentIdentity, ensureGuestIdentity, setGuestUsername, clearGuestIdentity, getGuestIdentity } from '../../data/identity.js';
 import { serverNow } from '../../data/serverTime.js';
 import { checkAnswerMC as apiCheckMC, checkAnswerBonus as apiCheckBonus } from '../../api/client.js';
@@ -47,7 +47,7 @@ export default function MultiplayerRoom() {
     const displayName = identNow?.displayName || 'Player';
     setBusy(true);
     try {
-      await attemptMpBuzz({ roomId, uid, displayName });
+  await attemptMpBuzz({ roomId, uid, displayName });
     } finally { setBusy(false); }
   }
   const { roomId } = useParams();
@@ -111,32 +111,7 @@ export default function MultiplayerRoom() {
   const [typingMap, setTypingMap] = useState({});
   const [buzzesMap, setBuzzesMap] = useState({});
   const [answersMap, setAnswersMap] = useState({}); // { [questionId]: { [uid]: {status, text, ...} } }
-  // Streaming states mimic PracticeMode
-  // Streaming & MC answer typing now handled by useStreamingQuestion hook
-  const streaming = useStreamingQuestion({
-    room,
-    roomId,
-    currentQ,
-    parseMCChoicesRG,
-    setStemFinishedAt,
-    setChoicesFinishedAt,
-    resultBanner,
-  });
-  const {
-    displayedWordCount,
-    setDisplayedWordCount,
-    choiceStreamCount,
-    setChoiceStreamCount,
-    revealChoicesAfterCheck,
-    setRevealChoicesAfterCheck,
-    mcTypedAnswer,
-    setMcTypedAnswer,
-    streamFinished,
-    words,
-    plainQuestionText,
-    choices,
-    fullMcChoices,
-  } = streaming;
+  // Streaming states mimic PracticeMode (initialized after currentQ is computed)
   // Local tick to refresh countdown UIs
   const [tick, setTick] = useState(0);
   // Removed userAnswer state (radio MC)
@@ -146,6 +121,8 @@ export default function MultiplayerRoom() {
   const saInputRef = useRef(null); // short-answer input
   const mcInputRef = useRef(null); // MC typed input
   const chatInputRef = useRef(null);
+  const answerSubmissionPendingRef = useRef(false);
+  const [answerSubmissionPending, setAnswerSubmissionPending] = useState(false);
 
   // Subscribe to room, members, messages, answers
   useEffect(() => {
@@ -241,12 +218,52 @@ export default function MultiplayerRoom() {
     return m;
   }, [allQs]);
   const currentQ = room?.game?.currentId ? byId.get(room.game.currentId) || null : null;
+
+  // Streaming & MC answer typing now handled by useStreamingQuestion hook
+  const streaming = useStreamingQuestion({
+    room,
+    roomId,
+    currentQ,
+    parseMCChoicesRG,
+    setStemFinishedAt,
+    setChoicesFinishedAt,
+    resultBanner,
+  });
+  const {
+    displayedWordCount,
+    choiceStreamCount,
+    choiceWordProgress,
+    choiceWordArrays,
+    mcTypedAnswer,
+    setMcTypedAnswer,
+    streamFinished,
+    words,
+    plainQuestionText,
+    choices,
+    fullMcChoices,
+  } = streaming;
   const amMember = React.useMemo(() => {
     const ident = getCurrentIdentity();
     const uid = ident?.uid;
     if (!uid) return false;
     return members.some(m => m.uid === uid);
   }, [members, auth?.user?.uid]);
+
+  const remoteReadingSpeed = React.useMemo(() => {
+    const ms = Math.max(60, Number(room?.state?.perWordMs || 200));
+    const derived = Math.round(1000 / ms);
+    return Math.min(12, Math.max(1, derived));
+  }, [room?.state?.perWordMs]);
+  const [localReadingSpeed, setLocalReadingSpeed] = useState(remoteReadingSpeed);
+  useEffect(() => {
+    setLocalReadingSpeed(remoteReadingSpeed);
+  }, [remoteReadingSpeed]);
+  const handleReadingSpeedChange = React.useCallback((value) => {
+    const next = Math.min(12, Math.max(1, Math.round(Number(value) || 1)));
+    setLocalReadingSpeed(next);
+    if (!roomId) return;
+    updateStreamingSpeed({ roomId, wordsPerSecond: next }).catch(() => {});
+  }, [roomId]);
   // Hostless mode: no host privileges; selection is local per user
 
   // Side panel: wire filters using useFilters but sync state with RTDB settings
@@ -402,7 +419,11 @@ export default function MultiplayerRoom() {
   const isBonusCurrent = String(currentQ?.question_type || '').toLowerCase() === 'bonus';
 
   // When question changes, clear grading banner; streaming hook resets its own internals
-  useEffect(() => { setResultBanner(null); }, [currentQ?.id]);
+  useEffect(() => {
+    setResultBanner(null);
+    answerSubmissionPendingRef.current = false;
+    setAnswerSubmissionPending(false);
+  }, [currentQ?.id]);
 
   // Space to buzz; 'p' to pause/resume (when not typing)
   useEffect(() => {
@@ -519,49 +540,73 @@ export default function MultiplayerRoom() {
     answerWindowUid,
     answerWindowDeadlineAt,
     answerWindowRemainingMs,
-  } = useBuzzTimers({ room, roomId, currentQ, setMpBuzzerOpen, resetBuzzWindowNow });
+  } = useBuzzTimers({ room, roomId, currentQ });
+  const timesUp = !!currentQ && !!room?.state?.timerExpiredAt;
+  const correctAnswerText = useMemo(() => {
+    if (!currentQ) return '';
+    const ans = currentQ.answer || (Array.isArray(currentQ.answers) ? currentQ.answers[0] : '') || '';
+    return String(ans).trim();
+  }, [currentQ?.id]);
 
   // Auto-close buzzer when shared buzz window expires (no active winner)
   useEffect(() => {
     if (!currentQ) return;
-    if (!room?.state?.buzzerOpen) return;
     if (room?.state?.winnerUid) return;
     if (room?.state?.awaitNext) return;
-    if (buzzWindowRemainingMs === null) return; // not anchored yet
-    if (buzzWindowRemainingMs > 0) return; // still time left
-    (async () => { try { await setMpBuzzerOpen({ roomId, open: false }); } catch {} })();
-  }, [buzzWindowRemainingMs, !!currentQ, room?.state?.buzzerOpen, room?.state?.winnerUid, room?.state?.awaitNext]);
+    if (room?.state?.timerExpiredAt) return;
+    if (!room?.state?.choicesFinishedAt) return;
+    if (buzzWindowRemainingMs === null) return;
+    if (buzzWindowRemainingMs > 0) return;
+    (async () => {
+      try {
+        await Promise.allSettled([
+          setTimerExpired({ roomId, questionId: currentQ.id, at: serverNow() }),
+          setMpBuzzerOpen({ roomId, open: false }),
+        ]);
+      } catch {}
+      try { await updateTyping(roomId, false, ''); } catch {}
+    })();
+  }, [buzzWindowRemainingMs, !!currentQ, room?.state?.winnerUid, room?.state?.awaitNext, room?.state?.timerExpiredAt, room?.state?.choicesFinishedAt]);
 
   // Ensure buzz window start is anchored as soon as choices finish (if buzzer is open)
   // (Buzz window anchoring handled inside useBuzzTimers hook)
 
-  // Auto-handle answer timeout after 3s if winner hasn't submitted
+  // Auto-handle answer timeout after 8s if winner hasn't submitted
   useEffect(() => {
     if (!currentQ) return;
-    const uid = room?.state?.winnerUid;
-    if (!uid) return;
-    if (!answerWindowUid || uid !== answerWindowUid) return;
-    if (!answerWindowRemainingMs || answerWindowRemainingMs > 0) return;
-    const ansRec = answersMap?.[currentQ.id]?.[uid] || null;
-    if (ansRec) return; // already answered
-    // Try to claim handling; only one client proceeds
+    const winnerUid = room?.state?.winnerUid;
+    if (!winnerUid) return;
+    if (!answerWindowUid || winnerUid !== answerWindowUid) return;
+    if (answerSubmissionPendingRef.current) return;
+    if (room?.state?.grading) return;
+  if (room?.state?.answerWindowResolved) return;
+    if (answerWindowRemainingMs === null || answerWindowRemainingMs > 0) return;
+    const ansRec = answersMap?.[currentQ.id]?.[winnerUid] || null;
+    if (ansRec) return;
+    const localIdent = getCurrentIdentity();
+    const isWinnerClient = localIdent?.uid === winnerUid;
+    // Only one client should process the timeout; claim before acting
     (async () => {
       try {
-        const claimed = await claimAnswerTimeout({ roomId, uid });
+        const claimed = await claimAnswerTimeout({ roomId, uid: winnerUid });
         if (!claimed) return;
-        const isTossup = String(currentQ?.question_type || '').toLowerCase() === 'tossup';
-        const interrupt = !!room?.state?.currentBuzzInterrupt;
-        const delta = isTossup ? (interrupt ? -4 : 0) : 0;
-        const identNow = getCurrentIdentity();
-        const displayName = identNow?.displayName || 'Player';
-        await setAnswerStatus({ roomId, questionId: currentQ.id, uid, displayName, data: { status: 'incorrect', text: '', correct: false, points: delta } });
-        if (delta !== 0) { try { await awardScoreRtdb({ roomId, uid, delta }); } catch {} }
-        await mpLockoutUid({ roomId, uid });
-        await clearMpBuzz({ roomId });
-        await setMpBuzzerOpen({ roomId, open: true });
+        if (isWinnerClient) {
+          await finalizeWinnerAnswer({ answerText: mcTypedAnswer, auto: true, allowBlank: true, reasonWhenEmpty: 'Time expired' });
+        } else {
+          const winnerMember = members.find(m => m.uid === winnerUid);
+          const displayName = winnerMember?.displayName || room?.state?.winnerName || ansRec?.displayName || 'Player';
+          const isTossup = String(currentQ?.question_type || '').toLowerCase() === 'tossup';
+          const interrupt = !!room?.state?.currentBuzzInterrupt;
+          const delta = isTossup ? (interrupt ? -4 : 0) : 0;
+          await setAnswerStatus({ roomId, questionId: currentQ.id, uid: winnerUid, displayName, data: { status: 'incorrect', text: '', correct: false, points: delta } });
+          if (delta !== 0) { try { await awardScoreRtdb({ roomId, uid: winnerUid, delta }); } catch {} }
+          await mpLockoutUid({ roomId, uid: winnerUid });
+          await clearMpBuzz({ roomId });
+          await setMpBuzzerOpen({ roomId, open: true });
+        }
       } catch {}
     })();
-  }, [answerWindowRemainingMs, answersMap, currentQ?.id, room?.state?.winnerUid, answerWindowUid]);
+  }, [answerWindowRemainingMs, answersMap, currentQ?.id, room?.state?.winnerUid, answerWindowUid, mcTypedAnswer, members, room?.state?.currentBuzzInterrupt, room?.state?.grading, room?.state?.answerWindowResolved]);
 
   // Join handler with passcode for private rooms
   async function handleJoinWithPass() {
@@ -713,120 +758,189 @@ export default function MultiplayerRoom() {
   }
 
   // Helpers for grading
-  // localCheckMultipleChoice removed; all MC answers use API and textbox input
+  function resolveMcCorrectKey(q, choicesForQ = []) {
+    if (!q) return null;
+    const keyMap = { a: 'w', b: 'x', c: 'y', d: 'z' };
+    const rawAnswer = String(
+      q.answer ??
+      (Array.isArray(q.answers) ? q.answers[0] : '') ??
+      ''
+    ).toLowerCase();
+    const answerBody = rawAnswer.replace(/^answer[:\-\s]+/i, '').trim();
+    const cleaned = answerBody.replace(/[()\s.]/g, '');
+    const first = cleaned.charAt(0);
+    let candidate = keyMap[first] || first;
+    if (!['w', 'x', 'y', 'z'].includes(candidate)) {
+      const letterMatch = answerBody.match(/\b([wxyz])\b/);
+      if (letterMatch) candidate = letterMatch[1];
+    }
+    if (!['w', 'x', 'y', 'z'].includes(candidate)) {
+      const normalize = (str) => String(str || '')
+        .toLowerCase()
+        .replace(/^answer[:\-\s]+/i, '')
+        .replace(/^[wxyz][.)\s-]*/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+  const answerTextNorm = normalize(answerBody);
+      for (const [key, text] of choicesForQ) {
+        const choiceNorm = normalize(text);
+        if (!choiceNorm || !answerTextNorm) continue;
+        if (answerTextNorm === choiceNorm || answerTextNorm.endsWith(choiceNorm) || choiceNorm.endsWith(answerTextNorm)) {
+          candidate = key;
+          break;
+        }
+      }
+    }
+    return ['w', 'x', 'y', 'z'].includes(candidate) ? candidate : null;
+  }
 
-  async function submitAnswerOrChat(e) {
-    e?.preventDefault();
+  async function finalizeWinnerAnswer({ answerText, auto = false, allowBlank = false, reasonWhenEmpty = 'No answer provided' }) {
+    if (!currentQ) return null;
+    const identNow = getCurrentIdentity();
+    const uid = identNow?.uid;
+    if (!uid || room?.state?.winnerUid !== uid) return null;
+    const displayName = identNow?.displayName || 'Player';
     const choicesLocal = parseMCChoicesRG(currentQ);
     const isMc = (choicesLocal || []).length > 0;
-    // Winner input uses a single text box (mcTypedAnswer) for BOTH MC and short-answer
-    const answerText = (mcTypedAnswer || '').trim();
-    // For MC and Short Answer: we always take the winner's typed input
-    const v = answerText;
-    if (!v) {
-      // Block empty submissions to avoid confusing grading responses
-      setResultBanner({ correct: false, reason: 'No answer provided' });
-      return;
+    const trimmed = String(answerText || '').trim();
+
+    if (!trimmed && !allowBlank) {
+      setResultBanner({ correct: false, reason: reasonWhenEmpty });
+      return null;
     }
-    if (!currentQ) return;
-  const identNow = getCurrentIdentity();
-  const uid = identNow?.uid;
-  const displayName = identNow?.displayName || 'Player';
-    const isWinner = uid && room?.state?.winnerUid === uid;
+    try { await updateTyping(roomId, false, ''); } catch {}
+    answerSubmissionPendingRef.current = true;
+    setAnswerSubmissionPending(true);
 
-  // Show grading animation for all users
-  await setMpGrading({ roomId, grading: true });
-
-    // Winner: grade answer using API
-    const isTossup = String(currentQ?.question_type || '').toLowerCase() === 'tossup';
-    const choices = choicesLocal;
-    const stem = String(currentQ?.question || currentQ?.leadin || currentQ?.text || '').trim();
-    const correct = String(
-      currentQ?.answer ??
-      (Array.isArray(currentQ?.answers) ? currentQ.answers[0] : '') ??
-      ''
-    ).trim();
-    let result = null;
+    let finalResult = null;
     try {
-      if (isTossup) {
-        if (isMc) {
-          // Tossup MC
-          const body = {
-            userAnswer: answerText,
-            correctAnswer: correct,
-            question: stem,
-            choices: choices,
+      try { await resolveAnswerWindow({ roomId }); } catch {}
+      try {
+        await setAnswerStatus({
+          roomId,
+          questionId: currentQ.id,
+          uid,
+          displayName,
+          data: { status: 'pending', text: trimmed, correct: null },
+        });
+      } catch {}
+
+      const isTossup = String(currentQ?.question_type || '').toLowerCase() === 'tossup';
+      const stem = String(currentQ?.question || currentQ?.leadin || currentQ?.text || '').trim();
+      let correct = String(
+        currentQ?.answer ??
+        (Array.isArray(currentQ?.answers) ? currentQ.answers[0] : '') ??
+        ''
+      ).trim();
+      // Remove leading option letter and parenthesis, e.g. "W) " or "x) " or "(W) "
+      correct = correct.replace(/^\(?[wxyz]\)?[.)\s-]*/i, '');
+
+      let result = null;
+      let gradingActive = false;
+      const choicesForKey = Array.isArray(choicesLocal) ? choicesLocal : [];
+      const normalizedTypedKey = trimmed.toLowerCase().trim();
+      const localMc = isMc && ['w', 'x', 'y', 'z'].includes(normalizedTypedKey) && normalizedTypedKey.length === 1;
+
+      if (localMc) {
+        const correctKey = resolveMcCorrectKey(currentQ, choicesForKey);
+        if (correctKey) {
+          const ok = normalizedTypedKey === correctKey;
+          result = {
+            correct: ok,
+            ...(ok ? {} : { reason: `Correct: ${correctKey.toUpperCase()}` }),
           };
-          const res = await apiCheckMC(body);
-          result = await res.json();
         } else {
-          // Tossup short answer
-          const body = {
-            userAnswer: answerText,
-            correctAnswer: correct,
-            question: stem,
-          };
-          const res = await apiCheckBonus(body);
-          result = await res.json();
+          result = { correct: false, reason: 'Correct letter unavailable' };
         }
-      } else {
-        // Bonus (always use checkBonus)
-        const body = {
-          userAnswer: answerText,
-          correctAnswer: correct,
-          question: stem,
-          ...(isMc ? { choices } : {}),
-        };
-        const res = await apiCheckBonus(body);
-        result = await res.json();
       }
-    } catch (err) {
-      result = { correct: false, reason: 'Grading failed' };
-    }
 
-  setResultBanner(result);
-  setChat('');
-  // Keep mcTypedAnswer so others see the final locked text until next question
+      if (!result && trimmed) {
+        gradingActive = true;
+        await setMpGrading({ roomId, grading: true });
+        try {
+          if (isTossup) {
+            if (isMc) {
+              const body = {
+                userAnswer: trimmed,
+                correctAnswer: correct,
+                question: stem,
+                choices: choicesLocal,
+              };
+              const res = await apiCheckMC(body);
+              result = await res.json();
+            } else {
+              const body = {
+                userAnswer: trimmed,
+                correctAnswer: correct,
+                question: stem,
+              };
+              const res = await apiCheckBonus(body);
+              result = await res.json();
+            }
+          } else {
+            const body = {
+              userAnswer: trimmed,
+              correctAnswer: correct,
+              question: stem,
+              ...(isMc ? { choices: choicesLocal } : {}),
+            };
+            const res = await apiCheckBonus(body);
+            result = await res.json();
+          }
+        } catch (err) {
+          result = { correct: false, reason: 'Grading failed' };
+        }
+      } else if (!trimmed) {
+        result = { correct: false, reason: reasonWhenEmpty || 'Time expired' };
+      }
 
-  // Hide grading animation after grading
-  await setMpGrading({ roomId, grading: false });
+      if (!result) {
+        result = { correct: false, reason: 'Grading failed' };
+      }
 
-    // Determine interrupt (buzzed before stem finished)
-    const interrupt = !streamFinished;
-    let delta = 0;
-    if (isTossup) {
-      delta = result.correct ? 4 : (interrupt ? -4 : 0);
-    } else {
-      delta = result.correct ? 10 : 0;
-    }
+      setResultBanner(result);
+      setChat('');
 
-    await setAnswerStatus({ roomId, questionId: currentQ.id, uid, displayName, data: { status: result.correct ? 'correct' : 'incorrect', text: v, correct: !!result.correct, points: delta } });
+      if (gradingActive) {
+        await setMpGrading({ roomId, grading: false });
+      } else if (auto) {
+        // Ensure grading flag is cleared if lingering from prior states
+        await setMpGrading({ roomId, grading: false });
+      }
+
+      const interrupt = !streamFinished;
+      let delta = 0;
+      if (isTossup) {
+        delta = result.correct ? 4 : (interrupt ? -4 : 0);
+      } else {
+        delta = result.correct ? 10 : 0;
+      }
+
+      await setAnswerStatus({ roomId, questionId: currentQ.id, uid, displayName, data: { status: result.correct ? 'correct' : 'incorrect', text: trimmed, correct: !!result.correct, points: delta } });
       if (delta !== 0) {
         await awardScoreRtdb({ roomId, uid, delta });
       }
 
-    if (result.correct) {
-      // Correct toss-up or bonus: wait for manual advance
-      await setAwaitNext({ roomId, value: true });
-    } else {
-      // Incorrect attempt: lock out ONLY this uid and reopen buzzer so someone else can buzz.
-      await mpLockoutUid({ roomId, uid });
-      await clearMpBuzz({ roomId });
-      // TIMER RULE ADJUSTMENTS:
-      // 1. If the question has NOT finished streaming (choicesFinishedAt absent), we simply reopen
-      //    the buzzer without anchoring a timer yet (interrupt case unaffected).
-      // 2. If streaming IS complete (choicesFinishedAt present), we reset the buzz window to a
-      //    5 second rebound window for remaining players.
-      const streamingDone = !!room?.state?.choicesFinishedAt; // stem + choices complete
-      if (streamingDone) {
-        // resetBuzzWindowNow will now shorten toss-up rebound windows to 5s (multiplayer.rtdb logic)
-        await resetBuzzWindowNow({ roomId });
-        await setMpBuzzerOpen({ roomId, open: true });
+      if (result.correct) {
+        await setAwaitNext({ roomId, value: true });
       } else {
-        // Interrupt before stem finished: just reopen buzzer; timer anchors later post-stream.
+        await mpLockoutUid({ roomId, uid });
+        await clearMpBuzz({ roomId });
         await setMpBuzzerOpen({ roomId, open: true });
       }
+
+      finalResult = result;
+    } finally {
+      answerSubmissionPendingRef.current = false;
+      setAnswerSubmissionPending(false);
     }
+
+    return finalResult;
+  }
+
+  async function submitAnswerOrChat(e) {
+    e?.preventDefault();
+    await finalizeWinnerAnswer({ answerText: mcTypedAnswer, auto: false, allowBlank: false, reasonWhenEmpty: 'No answer provided' });
   }
 
   async function nextQuestionManual() {
@@ -858,6 +972,8 @@ export default function MultiplayerRoom() {
                   winnerActive={room?.state?.winnerUid}
                   buzzWindowRemainingMs={buzzWindowRemainingMs}
                   showBuzzTimer={!!currentQ && !!room?.state?.buzzerOpen && !!room?.state?.choicesFinishedAt && !room?.state?.winnerUid && !room?.state?.awaitNext && !room?.state?.grading && buzzWindowRemainingMs !== null}
+                  readingSpeed={localReadingSpeed}
+                  onChangeReadingSpeed={handleReadingSpeedChange}
                 />
                 {questionError && <div className="text-sm text-red-600">{questionError}</div>}
                 <QuestionPanel
@@ -869,7 +985,11 @@ export default function MultiplayerRoom() {
                   showBuzzHint={!room?.state?.winnerUid && room?.state?.buzzerOpen}
                   fullMcChoices={fullMcChoices}
                   choiceStreamCount={choiceStreamCount}
+                  choiceWordProgress={choiceWordProgress}
+                  choiceWordArrays={choiceWordArrays}
                   resultBanner={resultBanner}
+                  timesUp={timesUp}
+                  correctAnswer={timesUp ? correctAnswerText : null}
                 />
                 {/* Buzz history: show all buzzes for current question in order */}
                 <BuzzList
@@ -888,6 +1008,8 @@ export default function MultiplayerRoom() {
                   mcInputRef={mcInputRef}
                   answerWindowUid={answerWindowUid}
                   answerWindowRemainingMs={answerWindowRemainingMs}
+                  answerSubmissionPending={answerSubmissionPending}
+                  answerWindowResolved={!!room?.state?.answerWindowResolved}
                 />
 
                 <HistoryPanel

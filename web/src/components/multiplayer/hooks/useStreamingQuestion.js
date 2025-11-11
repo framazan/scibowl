@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { serverNow } from '../../../data/serverTime.js';
 
 /**
@@ -8,8 +8,10 @@ import { serverNow } from '../../../data/serverTime.js';
 export default function useStreamingQuestion({ room, roomId, currentQ, parseMCChoicesRG, setStemFinishedAt, setChoicesFinishedAt, resultBanner }) {
   const [displayedWordCount, setDisplayedWordCount] = useState(0);
   const [choiceStreamCount, setChoiceStreamCount] = useState(0);
+  const [choiceWordProgress, setChoiceWordProgress] = useState([0, 0, 0, 0]);
   const [revealChoicesAfterCheck, setRevealChoicesAfterCheck] = useState(false);
   const [mcTypedAnswer, setMcTypedAnswer] = useState('');
+  const questionResetGuardRef = useRef(false);
 
   const plainQuestionText = useMemo(() => String(currentQ?.question || currentQ?.text || ''), [currentQ?.id]);
   const words = useMemo(() => plainQuestionText.split(/\s+/).filter(Boolean), [plainQuestionText]);
@@ -20,11 +22,30 @@ export default function useStreamingQuestion({ room, roomId, currentQ, parseMCCh
     const map = new Map(choices);
     return ['w','x','y','z'].map(k => [k, map.get(k)]);
   }, [choices]);
+  const choiceWordArrays = useMemo(() => {
+    return (fullMcChoices.length ? fullMcChoices : []).map(([, text = '']) => {
+      return String(text || '').split(/\s+/).filter(Boolean);
+    });
+  }, [fullMcChoices]);
+  const totalChoicesWithContent = useMemo(() => {
+    if (!choiceWordArrays.length) return 0;
+    return choiceWordArrays.reduce((acc, words) => acc + (words.length > 0 ? 1 : 0), 0);
+  }, [choiceWordArrays]);
+
+  // Guard downstream finish markers during the frame when a new question mounts
+  useEffect(() => {
+    questionResetGuardRef.current = true;
+    const rafId = window.requestAnimationFrame(() => {
+      questionResetGuardRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [currentQ?.id]);
 
   // Reset streaming when question changes
   useEffect(() => {
     setDisplayedWordCount(0);
     setChoiceStreamCount(0);
+    setChoiceWordProgress(Array.from({ length: 4 }, () => 0));
     setRevealChoicesAfterCheck(false);
     setMcTypedAnswer('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -61,58 +82,142 @@ export default function useStreamingQuestion({ room, roomId, currentQ, parseMCCh
     if (!currentQ) return;
     if (!streamFinished) return;
     if (room?.state?.stemFinishedAt) return;
-    (async () => { try { await setStemFinishedAt({ roomId, at: serverNow() }); } catch {} })();
+    if (questionResetGuardRef.current) return;
+    const hasWords = words.length > 0;
+    if (hasWords && displayedWordCount === 0) return;
+    if (!room?.state?.streamStartAt) return;
+  (async () => { try { await setStemFinishedAt({ roomId, questionId: currentQ?.id, at: serverNow() }); } catch {} })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamFinished, currentQ?.id, !!room?.state?.stemFinishedAt]);
+  }, [streamFinished, currentQ?.id, !!room?.state?.stemFinishedAt, displayedWordCount, words.length, room?.state?.streamStartAt]);
+
+  // Keep choiceStreamCount in sync with fully revealed choices based on word progress
+  useEffect(() => {
+    if (!currentQ) return;
+    if (!choiceWordArrays.length) {
+      if (choiceStreamCount !== 0) setChoiceStreamCount(0);
+      return;
+    }
+    const lengths = choiceWordArrays.map(arr => arr.length);
+    const revealedCount = lengths.reduce((acc, len, idx) => {
+      const shown = choiceWordProgress[idx] || 0;
+      if (len === 0) return acc;
+      return acc + (shown >= len ? 1 : 0);
+    }, 0);
+    if (revealedCount > choiceStreamCount) {
+      setChoiceStreamCount(Math.min(choiceWordArrays.length, revealedCount));
+    }
+  }, [choiceWordArrays, choiceWordProgress, choiceStreamCount, currentQ]);
+
+  // Ensure awaitNext forces full reveal immediately
+  useEffect(() => {
+    if (!currentQ) return;
+    if (!room?.state?.awaitNext) return;
+    const lengths = choiceWordArrays.map(arr => arr.length);
+    const allShown = lengths.every((len, idx) => (len === 0) || (choiceWordProgress[idx] || 0) >= len);
+    if (allShown) return;
+    setChoiceWordProgress(lengths.map(len => len));
+    setChoiceStreamCount(Math.min(choiceWordArrays.length, lengths.filter(len => len > 0).length));
+  }, [currentQ, room?.state?.awaitNext, choiceWordArrays, choiceWordProgress]);
 
   // Stream choices gradually after stem finished; pause when winner present
   useEffect(() => {
     if (!currentQ) return;
-    if (choices.length === 0) return;
+    if (!choiceWordArrays.length) return;
     if (!streamFinished) return;
     const perChoiceMs = Number(room?.state?.perChoiceMs || 400);
     const stemFinishedAt = Number(room?.state?.stemFinishedAt || 0);
     if (!stemFinishedAt) return;
 
-    if (room?.state?.awaitNext) {
-      if (choiceStreamCount < 4) setChoiceStreamCount(4);
+    if (room?.state?.awaitNext) return;
+    if (room?.state?.winnerUid || !room?.state?.buzzerOpen) return;
+
+    const activeIndex = Math.min(choiceStreamCount, choiceWordArrays.length - 1);
+    if (activeIndex < 0) return;
+    const totalWords = choiceWordArrays[activeIndex]?.length || 0;
+    if (totalWords === 0) {
+      if (choiceStreamCount < choiceWordArrays.length) {
+        setChoiceStreamCount((n) => Math.min(choiceWordArrays.length, n + 1));
+      }
       return;
     }
-    if (room?.state?.winnerUid || !room?.state?.buzzerOpen || choiceStreamCount >= 4) return;
-    const id = setInterval(() => setChoiceStreamCount(n => Math.min(4, n + 1)), perChoiceMs);
+    const shown = choiceWordProgress[activeIndex] || 0;
+    if (shown >= totalWords) {
+      return;
+    }
+
+    const id = setInterval(() => {
+      setChoiceWordProgress(prev => {
+        const next = prev.slice(0, Math.max(choiceWordArrays.length, 4));
+        const currentIdx = Math.min(choiceStreamCount, choiceWordArrays.length - 1);
+        if (currentIdx < 0) return prev;
+        const total = choiceWordArrays[currentIdx]?.length || 0;
+        if (total === 0) return prev;
+        const currentShown = next[currentIdx] || 0;
+        if (currentShown >= total) return prev;
+        const copy = next.slice();
+        copy[currentIdx] = Math.min(total, currentShown + 1);
+        return copy.length ? copy : prev;
+      });
+    }, Math.max(40, perChoiceMs));
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentQ?.id, choices.length, streamFinished, room?.state?.winnerUid, room?.state?.buzzerOpen, room?.state?.perChoiceMs, room?.state?.stemFinishedAt, room?.state?.awaitNext, choiceStreamCount]);
+  }, [currentQ?.id, streamFinished, room?.state?.winnerUid, room?.state?.buzzerOpen, room?.state?.perChoiceMs, room?.state?.stemFinishedAt, room?.state?.awaitNext, choiceStreamCount, choiceWordProgress, choiceWordArrays.length]);
 
   // After a correct check, quickly reveal remaining choices
   useEffect(() => {
     if (!currentQ) return;
-    if (choices.length === 0) return;
+    if (!choiceWordArrays.length) return;
     if (!resultBanner) return;
     if (!resultBanner.correct) return;
-    if (choiceStreamCount >= 4) return;
+    const lengths = choiceWordArrays.map(arr => arr.length);
+    const allShown = lengths.every((len, idx) => (len === 0) || (choiceWordProgress[idx] || 0) >= len);
+    if (allShown) return;
     if (!revealChoicesAfterCheck) setRevealChoicesAfterCheck(true);
-    const id = setInterval(() => setChoiceStreamCount(n => (n < 4 ? n + 1 : 4)), 150);
+    const id = setInterval(() => {
+      setChoiceWordProgress(prev => {
+        const next = prev.slice(0, Math.max(choiceWordArrays.length, 4));
+        let advanced = false;
+        for (let i = 0; i < choiceWordArrays.length; i += 1) {
+          const total = choiceWordArrays[i]?.length || 0;
+          if (total === 0) continue;
+          const currentShown = next[i] || 0;
+          if (currentShown < total) {
+            const copy = next.slice();
+            copy[i] = Math.min(total, currentShown + 2);
+            advanced = true;
+            return copy;
+          }
+        }
+        return advanced ? next : prev;
+      });
+    }, 120);
     return () => clearInterval(id);
-  }, [resultBanner, currentQ?.id, choices.length, choiceStreamCount, revealChoicesAfterCheck]);
+  }, [resultBanner, currentQ?.id, choiceWordArrays, choiceWordProgress, revealChoicesAfterCheck]);
 
   // Record shared choicesFinishedAt when all choices shown (or none exist)
   useEffect(() => {
     if (!currentQ) return;
     if (!streamFinished) return;
     if (room?.state?.choicesFinishedAt) return;
-    const hasChoices = Array.isArray(choices) && choices.length > 0;
-    const choicesDone = !hasChoices || choiceStreamCount >= 4;
+    if (questionResetGuardRef.current) return;
+    if (!room?.state?.stemFinishedAt) return;
+    const hasWords = words.length > 0;
+    if (hasWords && displayedWordCount === 0) return;
+    const hasChoices = totalChoicesWithContent > 0;
+    const choicesDone = !hasChoices || (choiceStreamCount >= totalChoicesWithContent);
     if (!choicesDone) return;
-    (async () => { try { await setChoicesFinishedAt({ roomId, at: serverNow() }); } catch {} })();
+  (async () => { try { await setChoicesFinishedAt({ roomId, questionId: currentQ?.id, at: serverNow() }); } catch {} })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentQ?.id, streamFinished, choiceStreamCount, !!room?.state?.choicesFinishedAt]);
+  }, [currentQ?.id, streamFinished, choiceStreamCount, !!room?.state?.choicesFinishedAt, !!room?.state?.stemFinishedAt, displayedWordCount, words.length, totalChoicesWithContent]);
 
   return {
     displayedWordCount,
     setDisplayedWordCount,
     choiceStreamCount,
     setChoiceStreamCount,
+    choiceWordProgress,
+    setChoiceWordProgress,
+    choiceWordArrays,
     revealChoicesAfterCheck,
     setRevealChoicesAfterCheck,
     mcTypedAnswer,

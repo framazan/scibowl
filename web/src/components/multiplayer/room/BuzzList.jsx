@@ -16,6 +16,8 @@ export default function BuzzList({
   mcInputRef,
   answerWindowUid,
   answerWindowRemainingMs,
+  answerSubmissionPending,
+  answerWindowResolved,
 }) {
   if (!currentQId || !Array.isArray(buzzes) || buzzes.length === 0) return null;
   return (
@@ -23,13 +25,18 @@ export default function BuzzList({
       {(buzzes.slice().reverse()).map((bz, ridx, rarr) => {
         const isActive = winnerUid === bz.uid && ridx === 0; // latest buzz on top
         const ansRec = answersForQ?.[bz.uid] || null;
-        const locked = !!ansRec;
-        const correct = !!ansRec?.correct;
+        const pendingForActive = isActive && !!answerSubmissionPending;
+        const status = ansRec?.status || null;
+        const hasSubmitted = pendingForActive || (status && status !== 'typing');
+        const locked = !!hasSubmitted;
+        const isGraded = status === 'correct' || status === 'incorrect';
+        const correct = ansRec?.correct === true;
         const isSelf = selfUid === bz.uid;
         const showDraft = typingMap?.[bz.uid]?.draft || members.find(m=>m.uid===bz.uid)?.draft || '';
         const name = bz.displayName || members.find(m=>m.uid===bz.uid)?.displayName || bz.uid;
-        const showAnswerTimer = isActive && !locked && answerWindowUid === bz.uid;
+        const showAnswerTimer = isActive && !locked && answerWindowUid === bz.uid && !answerWindowResolved;
         const secondsLeft = showAnswerTimer && Number.isFinite(answerWindowRemainingMs) ? Math.ceil(Math.max(0, answerWindowRemainingMs)/1000) : null;
+        const displayedAnswer = ansRec?.text || (pendingForActive ? (isSelf ? mcTypedAnswer : showDraft) : '') || '';
         return (
           <div key={bz.id || `${bz.uid}-${ridx}`} className="rounded-lg bg-black/5 dark:bg-white/10 p-3">
             <div className="flex items-center gap-2 flex-wrap">
@@ -37,7 +44,9 @@ export default function BuzzList({
               <span className="chip text-xs bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-200">buzzed</span>
               <span className="text-[10px] opacity-60">#{(rarr.length - ridx)}</span>
               {locked ? (
-                <span className="ml-2 px-2 py-1 rounded bg-black/10 dark:bg-white/10 text-sm whitespace-pre-wrap break-words">{ansRec?.text || ''}</span>
+                displayedAnswer ? (
+                  <span className="ml-2 px-2 py-1 rounded bg-black/10 dark:bg-white/10 text-sm whitespace-pre-wrap break-words">{displayedAnswer}</span>
+                ) : null
               ) : isActive ? (
                 isSelf ? (
                   <div className="flex items-center gap-2 flex-1 min-w-[240px]">
@@ -51,20 +60,20 @@ export default function BuzzList({
                         autoFocus
                       />
                     </form>
-                    {showAnswerTimer && (
+                    {showAnswerTimer && secondsLeft !== null && (
                       <span className="inline-flex items-center px-2 py-1 rounded bg-black/10 dark:bg-white/10 text-[11px] font-semibold">{secondsLeft}s</span>
                     )}
                   </div>
                 ) : (
                   <div className="flex items-center gap-2">
                     <span className="ml-2 text-sm text-black/80 dark:text-white/80 whitespace-pre-wrap break-words">{showDraft}</span>
-                    {showAnswerTimer && (
+                    {showAnswerTimer && secondsLeft !== null && (
                       <span className="inline-flex items-center px-2 py-1 rounded bg-black/10 dark:bg-white/10 text-[11px] font-semibold">{secondsLeft}s</span>
                     )}
                   </div>
                 )
               ) : null}
-              {locked && (
+              {isGraded && (
                 <span className={`chip text-xs ${correct ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-200' : 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-200'}`}>
                   {correct ? 'correct' : 'incorrect'}
                 </span>

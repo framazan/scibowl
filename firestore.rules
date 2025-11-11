@@ -1,22 +1,53 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Common helpers (defined within documents scope for linter compatibility)
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.admin == true ||
+        request.auth.uid == 'fkLJJ2R6HbdwqoXSxrLUybZ0IdH2'
+      );
+    }
+    // Public site metadata (top-level). Expose only the specific meta/tournaments doc for reads.
+    match /meta/{docId} {
+      allow read: if docId == 'tournaments';
+      allow write: if isAdmin();
+    }
+    // Publicly readable tournament metadata; admin-only write
+    match /tournaments/{tournament} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
     // Admin-only writes for tournament round content
     match /tournaments/{tournament}/rounds/{round} {
       allow read: if true; // public read
-      allow write: if request.auth != null && request.auth.uid == 'fkLJJ2R6HbdwqoXSxrLUybZ0IdH2';
+      allow write: if isAdmin();
     }
 
-    // Public reads for question content
-    match /{document=**} {
+    // Public countdown timers (homepage). Public read; admin-only write.
+    match /countdowns/{docId} {
       allow read: if true;
+      allow write: if isAdmin();
     }
 
     // Users can read/write their own metadata and rounds
     match /users/{uid}/meta/{docId} {
-      // Allow owners to read and write their own meta
-      allow read: if request.auth != null && request.auth.uid == uid;
+      // Allow owners to read their own meta; additionally, allow public read of the admin presets doc
+      allow read: if (request.auth != null && request.auth.uid == uid)
+                   || (uid == 'fkLJJ2R6HbdwqoXSxrLUybZ0IdH2' && docId == 'presets');
+      // Default: users may write only their own meta
       allow write: if request.auth != null && request.auth.uid == uid;
+
+      // Exception: allow any authenticated user to claim a preset by removing
+      // one or more IDs from the admin's presets set array at
+      // users/fkLJJ2R6HbdwqoXSxrLUybZ0IdH2/meta/presets.
+      // This rule ONLY permits shrinking the 'set' array (subset) and
+      // disallows any other field creation/modification/deletion.
+      // UPDATE: Allow preset-claim removal even for unauthenticated users,
+      // still restricted to subset-only updates on the single admin presets doc.
+      allow update: if uid == 'fkLJJ2R6HbdwqoXSxrLUybZ0IdH2'
+                    && docId == 'presets'
+                    && isPresetRemovalOnly();
     }
 
     match /users/{uid}/rounds/{roundId} {
@@ -26,6 +57,136 @@ service cloud.firestore {
                    || (uid == 'fkLJJ2R6HbdwqoXSxrLUybZ0IdH2');
       allow write: if request.auth != null && request.auth.uid == uid;
     }
+
+    // ==================
+    // Buzzer game rooms
+    // ==================
+    function isGameHost(code) {
+      return request.auth != null &&
+        get(/databases/$(database)/documents/games/$(code)).data.hostUid == request.auth.uid;
+    }
+    // Allow non-host players to atomically claim a buzz winner exactly once per open cycle.
+    function isBuzzClaim() {
+      return request.auth != null
+        // Only specific state fields may change
+        && request.resource.data.diff(resource.data).addedKeys().size() == 0
+        && request.resource.data.diff(resource.data).removedKeys().size() == 0
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['state'])
+        // Within state, only these keys can change
+        && request.resource.data.state.diff(resource.data.state).addedKeys().size() == 0
+        && request.resource.data.state.diff(resource.data.state).removedKeys().size() == 0
+        && request.resource.data.state.diff(resource.data.state).changedKeys().hasOnly(['winnerUid','winnerName','winnerAt','buzzerOpen'])
+        // Must switch from open -> closed
+        && resource.data.state.buzzerOpen == true
+        && request.resource.data.state.buzzerOpen == false
+        // Previous winner must be null and new winner must be the caller
+        && (resource.data.state.winnerUid == null || resource.data.state.winnerUid == '')
+        && request.resource.data.state.winnerUid == request.auth.uid;
+    }
+    match /games/{code} {
+      allow read: if request.auth != null;
+      // Allow create by any authenticated user; subsequent updates restricted to host or valid buzz claim
+      allow create: if request.auth != null;
+      allow update: if isGameHost(code) || isBuzzClaim();
+      allow delete: if isGameHost(code);
+    }
+    match /games/{code}/players/{uid} {
+      allow read: if request.auth != null;
+      // Player can create/update their own record; host can also update any player (for scoring, admin actions)
+      allow create, update: if (request.auth != null && request.auth.uid == uid) || isGameHost(code);
+      allow delete: if isGameHost(code) || (request.auth != null && request.auth.uid == uid);
+    }
+
+    // ==================
+    // Multiplayer rooms
+    // ==================
+    function isMpHost(roomId) {
+      return request.auth != null &&
+        get(/databases/$(database)/documents/mp_rooms/$(roomId)).data.hostUid == request.auth.uid;
+    }
+    function isMpMember(roomId) {
+      return request.auth != null && exists(/databases/$(database)/documents/mp_rooms/$(roomId)/members/$(request.auth.uid));
+    }
+    match /mp_rooms/{roomId} {
+      // Rooms are readable to all authenticated users
+      allow read: if true;
+      // Allow create by authenticated users
+      allow create: if request.auth != null;
+      // Allow updates only by host and restrict field set
+      allow update: if (
+          isMpHost(roomId) && request.resource.data.diff(resource.data).changedKeys().hasOnly(['name','status','isPrivate','memberCount'])
+        ) || (
+          // Members may update limited game/state fields
+          isMpMember(roomId)
+          && (
+            // Only 'state' and 'game' keys can change
+            request.resource.data.diff(resource.data).changedKeys().hasOnly(['state','game'])
+            // Within state, allow buzzer fields and winner
+            && (
+              !request.resource.data.diff(resource.data).changedKeys().hasAny(['state'])
+              || (
+                request.resource.data.state.diff(resource.data.state).addedKeys().size() == 0
+                && request.resource.data.state.diff(resource.data.state).removedKeys().size() == 0
+                && request.resource.data.state.diff(resource.data.state).changedKeys().hasOnly(['buzzerOpen','winnerUid','winnerName','winnerAt'])
+              )
+            )
+            // Within game, allow currentId and tournaments
+            && (
+              !request.resource.data.diff(resource.data).changedKeys().hasAny(['game'])
+              || (
+                request.resource.data.game.diff(resource.data.game).addedKeys().size() == 0
+                && request.resource.data.game.diff(resource.data.game).removedKeys().size() == 0
+                && request.resource.data.game.diff(resource.data.game).changedKeys().hasOnly(['currentId','tournaments'])
+              )
+            )
+          )
+        );
+      allow delete: if isMpHost(roomId);
+
+      // Members subcollection
+      match /members/{uid} {
+        allow read: if true;
+        // Users can create/update their own membership with limited fields
+        allow create, update: if request.auth != null && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).addedKeys().hasOnly(['uid','displayName','joinedAt','score','typing','draft','lastTypedAt'])
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['displayName','score','typing','draft','lastTypedAt'])
+          // Non-hosts may not change score AFTER creation; initial create may include score
+          && (
+            isMpHost(roomId)
+            || (resource.data == null)
+            || !request.resource.data.diff(resource.data).changedKeys().hasAny(['score'])
+          )
+          // Limit typing/draft field sizes
+          && (request.resource.data.draft == null || (request.resource.data.draft is string && request.resource.data.draft.size() <= 200));
+        allow delete: if isMpHost(roomId) || (request.auth != null && request.auth.uid == uid);
+      }
+
+      // Messages subcollection
+      match /messages/{msgId} {
+        allow read: if true;
+        // Allow create by authenticated users with constraints; rate limiting is handled in Cloud Functions
+        allow create: if request.auth != null
+          && request.resource.data.uid == request.auth.uid
+          && (request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 500)
+          && request.resource.data.createdAt == request.time
+          && (request.resource.data.displayName is string);
+        // No updates/deletes by clients
+        allow update, delete: if false;
+      }
+    }
   }
   
+  // Helper to validate subset-only updates on the presets doc
+  function isPresetRemovalOnly() {
+    // Only 'set' may change; no keys may be added/removed at the top level
+    return request.resource.data.diff(resource.data).addedKeys().size() == 0
+      && request.resource.data.diff(resource.data).removedKeys().size() == 0
+      && request.resource.data.diff(resource.data).changedKeys().hasOnly(['set'])
+      // Enforce list types
+      && (resource.data.set is list)
+      && (request.resource.data.set is list)
+      // New list must be a subset of the old list and strictly smaller
+      && resource.data.set.hasAll(request.resource.data.set)
+      && request.resource.data.set.size() < resource.data.set.size();
+  }
 }

@@ -5,6 +5,11 @@ export default defineConfig({
   plugins: [react()],
   build: {
     rollupOptions: {
+      onwarn(warning, defaultHandler) {
+        // Suppress noisy Rollup warning when a manualChunks target ends up empty after tree-shaking
+        if (warning.code === 'EMPTY_BUNDLE') return;
+        defaultHandler(warning);
+      },
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return;

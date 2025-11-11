@@ -1,74 +1,42 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import LatexRenderer from './LatexRenderer.jsx';
-import { Check, Eye, EyeOff, SkipForward, AlertTriangle } from 'lucide-react';
+import { Check, Eye, EyeOff, SkipForward, AlertTriangle, ChevronLeft, Pin, PinOff } from 'lucide-react';
 import { useFilters } from './roundGenerator/hooks/useFilters.js';
 import TournamentSelector from './roundGenerator/components/TournamentSelector.jsx';
+import RoundRanges from './roundGenerator/components/RoundRanges.jsx';
+import CategoriesSelector from './roundGenerator/components/CategoriesSelector.jsx';
 import { parseMCChoices as parseMCChoicesRG, findBonus as findBonusRG } from './roundGenerator/utils/helpers.js';
 import { isVisualBonus, getVisualBonusUrl } from '../data/visualBonuses.js';
 import { checkAnswerMC as apiCheckMC, checkAnswerBonus as apiCheckBonus } from '../api/client.js';
+import useThemePreference from '../hooks/useThemePreference.js';
+
+function DoubleHelix() {
+  return (
+    <div className="flex items-center justify-center">
+      <svg width="40" height="40" viewBox="0 0 40 40" className="animate-spin">
+        <path
+          d="M20 5 Q25 10 20 15 Q15 20 20 25 Q25 30 20 35"
+          stroke="#3b82f6"
+          strokeWidth="2"
+          fill="none"
+          className="animate-pulse"
+        />
+        <path
+          d="M20 5 Q15 10 20 15 Q25 20 20 25 Q15 30 20 35"
+          stroke="#3b82f6"
+          strokeWidth="2"
+          fill="none"
+          className="animate-pulse"
+          style={{ animationDelay: '0.5s' }}
+        />
+      </svg>
+    </div>
+  );
+}
 
 function pickRandom(arr, predicate = () => true) {
   const pool = arr.filter(predicate);
   return pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
-}
-
-function findBonus(tossup, all) {
-  // Find bonus with same round, tournament, and question_number as tossup
-  if (!tossup) return null;
-  return all.find(q => q.question_type?.toLowerCase() === 'bonus' &&
-    q.round === tossup.round &&
-    q.tournament === tossup.tournament &&
-    q.question_number === tossup.question_number);
-}
-
-function parseMCChoices(q) {
-  const raw = q?.choices;
-  if (!raw) return [];
-
-  const order = ['w', 'x', 'y', 'z'];
-
-  function normalizeChoiceKey(k) {
-    const cleaned = String(k).replace(/[.)\s]/g, '').toLowerCase();
-    const first = cleaned[0];
-    const map = { a: 'w', b: 'x', c: 'y', d: 'z', w: 'w', x: 'x', y: 'y', z: 'z', '1': 'w', '2': 'x', '3': 'y', '4': 'z' };
-    return map[first] ?? first;
-  }
-
-  function extractText(v) {
-    if (typeof v === 'string') return v;
-    if (v && typeof v === 'object') {
-      return v.text ?? v.value ?? v.choice ?? v.content ?? v.answer ?? v.option ?? v.label ?? v.name ?? null;
-    }
-    return null;
-  }
-
-  // Array shapes: ['...', '...', ...] or [{text:'...'}, ...]
-  if (Array.isArray(raw)) {
-    return raw
-      .map((item, idx) => {
-        const text = extractText(item);
-        if (!text) return null;
-        const providedKey = (item && typeof item === 'object'
-          ? (item.key ?? item.letter ?? item.label)
-          : null);
-        const key = normalizeChoiceKey(providedKey ?? order[idx] ?? String(idx + 1));
-        return [key, text];
-      })
-      .filter(Boolean);
-  }
-
-  // Object shapes: { W: '...', X: '...' } or { a: '...', b: '...' } or { 'w)': '...' }
-  const entries = Object.entries(raw)
-    .map(([k, v]) => {
-      const text = extractText(v);
-      if (!text) return null;
-      return [normalizeChoiceKey(k), text];
-    })
-    .filter(Boolean);
-
-  // Return in w/x/y/z order
-  const byKey = new Map(entries);
-  return order.map(k => [k, byKey.get(k)]).filter(([_, v]) => v != null);
 }
 
 export default function PracticeMode({ questions = [], tournamentName = null, lazy = null }) {
@@ -89,24 +57,60 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
     validQuestions,
     categories,
     inRanges, // not used here yet, but available
+    roundRanges,
+    setRoundRanges,
+    roundsByTournament,
+    globalNumericRoundMax,
   } = useFilters({ questions, lazy });
 
-  // Track dark mode to style components consistently with RoundGenerator
-  const [isDark, setIsDark] = useState(() => {
-    try { return document.documentElement.classList.contains('dark'); } catch { return false; }
-  });
-  useEffect(() => {
+  // Track dark mode via shared preference hook (reactive to header toggle)
+  const { dark } = useThemePreference();
+  const isDark = !!dark;
+
+  // Left pane collapsible and resizable state
+  const [leftPaneCollapsed, setLeftPaneCollapsed] = useState(false);
+  const [leftPaneHovered, setLeftPaneHovered] = useState(false);
+  const [leftPanePinned, setLeftPanePinned] = useState(true); // true = expanded and pinned
+  const [leftPaneWidth, setLeftPaneWidth] = useState(() => {
     try {
-      const root = document.documentElement;
-      const update = () => setIsDark(root.classList.contains('dark'));
-      update();
-      const mo = new MutationObserver(update);
-      mo.observe(root, { attributes: true, attributeFilter: ['class'] });
-      const mql = window.matchMedia('(prefers-color-scheme: dark)');
-      mql.addEventListener('change', update);
-      return () => { mo.disconnect(); mql.removeEventListener('change', update); };
-    } catch { /* no-op */ }
-  }, []);
+      const v = localStorage.getItem('sb_leftPaneWidth_practice');
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 220 && n <= 720 ? n : 320;
+    } catch { return 320; }
+  });
+  const resizingRef = useRef(false);
+  const startXRef = useRef(0);
+  const startWRef = useRef(320);
+  useEffect(() => {
+    function onMove(e) {
+      if (!resizingRef.current) return;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const dx = clientX - startXRef.current;
+      let next = Math.round(startWRef.current + dx);
+      next = Math.max(220, Math.min(720, next));
+      setLeftPaneWidth(next);
+    }
+    function onUp() {
+      if (!resizingRef.current) return;
+      resizingRef.current = false;
+      try { localStorage.setItem('sb_leftPaneWidth_practice', String(leftPaneWidth)); } catch {}
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+    };
+  }, [leftPaneWidth]);
+
+  // Previous questions state
+  const [previousQuestions, setPreviousQuestions] = useState([]);
 
   // Checkboxes for question types
   const [includeTossups, setIncludeTossups] = useState(true);
@@ -128,6 +132,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
     const catSet = new Set(selectedCategories);
     return validQuestions.filter(q => {
       if (selectedCategories.length && !catSet.has(q.category)) return false;
+      if (!inRanges(q)) return false;
       const type = q.question_type?.toLowerCase();
       const visual = isVisualBonus(q);
       if (type === 'tossup') return includeTossups;
@@ -141,7 +146,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
       }
       return false;
     });
-  }, [validQuestions, selectedCategories, includeTossups, includeBonuses, includeVisualBonuses, onlyVisualBonuses]);
+  }, [validQuestions, selectedCategories, inRanges, includeTossups, includeBonuses, includeVisualBonuses, onlyVisualBonuses]);
 
   const [current, setCurrent] = useState(null);
   const [userAnswer, setUserAnswer] = useState('');
@@ -150,6 +155,8 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
   const [result, setResult] = useState(null);
   const [showAnswer, setShowAnswer] = useState(false);
   const [bonusState, setBonusState] = useState(null); // {bonus, userAnswer, result, showAnswer}
+  const [checking, setChecking] = useState(false);
+  const [checkingTarget, setCheckingTarget] = useState(null); // 'tossup' | 'bonus' | null
 
   // Determine preferred type for new questions based on current toggles and availability
   const preferredType = useMemo(() => {
@@ -162,7 +169,7 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
 
   // Do not auto-select a question on load; wait for user to start.
 
-  const mcChoices = useMemo(() => parseMCChoices(current), [current]);
+  const mcChoices = useMemo(() => parseMCChoicesRG(current), [current]);
 
   function nextQuestion() {
     const pred = preferredType ? (q => q.question_type?.toLowerCase() === preferredType) : (() => true);
@@ -190,14 +197,16 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
       const ok = ansKey === key;
       return { correct: ok, reason: ok ? undefined : `Correct: ${ansKey.toUpperCase()}` };
     }
-    // Else compare selected text to answer text
+    // Else compare selected text to answer text - require exact match
     const selNorm = String(selectedText ?? '').toLowerCase().replace(/\s+/g,' ').trim();
     const ansNorm = ans.toLowerCase().replace(/\s+/g,' ').trim();
-    const ok = !!selNorm && (selNorm === ansNorm || ansNorm.includes(selNorm) || selNorm.includes(ansNorm));
+    const ok = !!selNorm && selNorm === ansNorm;
     return { correct: ok };
   }
 
   async function check() {
+    setChecking(true);
+    setCheckingTarget('tossup');
     try {
       let data;
       const isTossup = current?.question_type?.toLowerCase() === 'tossup';
@@ -234,14 +243,19 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
       }
     } catch (e) {
       setResult({ correct: false, reason: 'Check failed' });
+    } finally {
+      setChecking(false);
+      setCheckingTarget(null);
     }
   }
 
   // Bonus answer check
   async function checkBonus() {
     if (!bonusState) return;
+    setChecking(true);
+    setCheckingTarget('bonus');
     try {
-      const bonusChoices = parseMCChoices(bonusState.bonus);
+      const bonusChoices = parseMCChoicesRG(bonusState.bonus);
       let data;
       if (bonusChoices.length > 0) {
         data = localCheckMultipleChoice(bonusState.userAnswer, bonusState.bonus);
@@ -256,14 +270,59 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
       setBonusState(bs => ({ ...bs, result: data }));
     } catch (e) {
       setBonusState(bs => ({ ...bs, result: { correct: false, reason: 'Check failed' } }));
+    } finally {
+      setChecking(false);
+      setCheckingTarget(null);
     }
   }
 
   // UI scaffold similar to RoundGenerator's left panel
   return (
-    <div className="grid gap-6 w-full md:grid-cols-[320px_minmax(0,1fr)]">
-      <div className="md:self-start">
-        <div className="glass p-6 space-y-6">
+    <div className="relative">
+      <div
+        className={`relative z-10 grid gap-6 w-full md:grid-cols-[var(--left-pane-w)_minmax(0,1fr)]`}
+        style={{
+          // On small screens we let CSS stack naturally (grid becomes 1col). On md+, use the variable.
+          ['--left-pane-w']: (leftPaneCollapsed && !leftPaneHovered) ? '25px' : `${leftPaneWidth}px`
+        }}
+      >
+      <div className="md:self-start relative">
+        {/* Invisible hover area for collapsed pane */}
+        {leftPaneCollapsed && (
+          <div
+            className="absolute inset-0 z-5"
+            onMouseEnter={() => setLeftPaneHovered(true)}
+            onMouseLeave={() => setLeftPaneHovered(false)}
+          />
+        )}
+        <button
+          className="absolute top-2 -right-2 bg-white dark:bg-darkcard border border-black/10 dark:border-white/20 rounded-full p-1 shadow hover:bg-gray-50 dark:hover:bg-white/10 transition z-10"
+          onClick={() => {
+            if (leftPaneCollapsed || !leftPanePinned) {
+              setLeftPaneCollapsed(false);
+              setLeftPanePinned(true);
+            } else {
+              setLeftPanePinned(false);
+              setLeftPaneCollapsed(true);
+            }
+          }}
+          onMouseEnter={() => setLeftPaneHovered(true)}
+          onMouseLeave={() => setLeftPaneHovered(false)}
+          title={leftPaneCollapsed ? 'Expand panel' : leftPanePinned ? 'Unpin panel' : 'Pin panel'}
+        >
+          {leftPaneCollapsed ? (
+            leftPaneHovered ? <Pin className="h-4 w-4" /> : <ChevronLeft className={`h-4 w-4 transition-transform rotate-180`} />
+          ) : leftPanePinned ? (
+            <PinOff className="h-4 w-4" />
+          ) : (
+            <Pin className="h-4 w-4" />
+          )}
+        </button>
+        <div
+          className={`glass p-6 space-y-6 bg-white/80 dark:bg-darkcard/70 backdrop-blur transition-all duration-300 ${leftPaneCollapsed && !leftPaneHovered ? 'opacity-0 pointer-events-none scale-95' : 'opacity-100 scale-100'}`}
+          onMouseEnter={() => setLeftPaneHovered(true)}
+          onMouseLeave={() => setLeftPaneHovered(false)}
+        >
           {selectedTournaments.length === 0 && (
             <div
               role="alert"
@@ -287,25 +346,19 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
             showTournamentModal={false}
             setShowTournamentModal={() => {}}
           />
-          <div>
-            <div className="font-semibold mb-2">Categories</div>
-            <div className="flex flex-wrap gap-2">
-              {categories.map((c) => {
-                const active = selectedCategories.includes(c);
-                return (
-                  <label key={c} className={`chip cursor-pointer ${active ? 'ring-1 ring-tint bg-tint/10' : ''}`} title={c}>
-                    <input
-                      type="checkbox"
-                      className="mr-1"
-                      checked={active}
-                      onChange={() => setSelectedCategories(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])}
-                    />
-                    <span className="truncate max-w-[12rem] inline-block align-middle">{c}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
+          <CategoriesSelector
+            categories={categories}
+            selectedCategories={selectedCategories}
+            setSelectedCategories={setSelectedCategories}
+          />
+          <RoundRanges
+            selectedTournaments={selectedTournaments}
+            tournaments={tournaments}
+            roundRanges={roundRanges}
+            setRoundRanges={setRoundRanges}
+            roundsByTournament={roundsByTournament}
+            globalNumericRoundMax={globalNumericRoundMax}
+          />
           <div>
             <div className="font-semibold mb-2">Question Types</div>
             <div className="flex flex-wrap gap-2">
@@ -372,11 +425,40 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
             <div className="text-xs text-black/60 dark:text-white/60 mt-1">Space to buzz. Enter to check. “n” next, “a” show answer.</div>
           </div>
         </div>
+        {/* Drag handle (shown when pane visible on md+) */}
+        {!leftPaneCollapsed && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            title="Drag to resize"
+            onMouseDown={(e) => {
+              if (leftPaneCollapsed) return;
+              resizingRef.current = true;
+              startXRef.current = e.clientX;
+              startWRef.current = leftPaneWidth;
+              document.body.style.cursor = 'col-resize';
+              document.body.style.userSelect = 'none';
+            }}
+            onTouchStart={(e) => {
+              if (leftPaneCollapsed) return;
+              const t = e.touches?.[0];
+              if (!t) return;
+              resizingRef.current = true;
+              startXRef.current = t.clientX;
+              startWRef.current = leftPaneWidth;
+              document.body.style.cursor = 'col-resize';
+              document.body.style.userSelect = 'none';
+            }}
+            className={`hidden md:block absolute top-0 -right-5 h-full w-2 cursor-col-resize z-30 transition-colors`}
+          >
+            <div className="absolute inset-y-0 left-[-1px] right-[-1px] w-[1px] bg-gray-400 dark:bg-gray-500" />
+          </div>
+        )}
       </div>
 
       <div className="min-w-0">
         {!current ? (
-          <div className="glass p-6">
+          <div className="glass p-6 bg-white/80 dark:bg-darkcard/70 backdrop-blur">
             {practicePool.length ? (
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div>Ready to begin.</div>
@@ -399,6 +481,9 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
           <PracticeQuestionCard
             current={current}
             setCurrent={(q) => {
+              if (current) {
+                setPreviousQuestions(prev => [...prev, current]);
+              }
               setCurrent(q);
               setUserAnswer('');
               setMcTypedAnswer('');
@@ -421,15 +506,37 @@ export default function PracticeMode({ questions = [], tournamentName = null, la
             check={check}
             checkBonus={checkBonus}
             readingSpeed={readingSpeed}
+            checking={checking}
+            checkingTarget={checkingTarget}
           />
         )}
+        {previousQuestions.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-sm font-semibold text-black/60 dark:text-white/60">Previous Questions</div>
+            {previousQuestions.map((q, idx) => (
+              <div key={q.id || idx} className="glass p-4 bg-white/80 dark:bg-darkcard/70 backdrop-blur flex items-center justify-between">
+                <div className="text-sm">
+                  <span className="font-semibold">{String(q.tournament).toUpperCase()}</span>
+                  {' • Round '}{q.round}
+                  {' • '}{q.category}
+                  {q.question_number && <> • Q{q.question_number}</>}
+                  {' • '}{q.question_type?.toLowerCase() === 'bonus' ? 'Bonus' : 'Toss-up'}
+                </div>
+                <div className="text-sm text-black/60 dark:text-white/60 truncate max-w-[200px]">
+                  <LatexRenderer>{q.answer}</LatexRenderer>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       </div>
     </div>
   );
 }
 
-function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAnswer, setUserAnswer, mcTypedAnswer, setMcTypedAnswer, result, setResult, showAnswer, setShowAnswer, bonusState, setBonusState, check, checkBonus, readingSpeed }) {
-  const mcChoices = useMemo(() => parseMCChoices(current), [current]);
+function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAnswer, setUserAnswer, mcTypedAnswer, setMcTypedAnswer, result, setResult, showAnswer, setShowAnswer, bonusState, setBonusState, check, checkBonus, readingSpeed, checking, checkingTarget }) {
+  const mcChoices = useMemo(() => parseMCChoicesRG(current), [current]);
   const [currentVisualUrl, setCurrentVisualUrl] = React.useState(null);
   const [showCurrentVisualFull, setShowCurrentVisualFull] = React.useState(false);
   const [bonusVisualUrl, setBonusVisualUrl] = React.useState(null);
@@ -558,10 +665,12 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
           check();
         }
       }
-      // n for next question
+      // n for next question (blocked while checking)
       if ((key === 'n' || key === 'N') && !isTypingInInput(target)) {
         e.preventDefault();
-        nextQuestion();
+        if (!checking) {
+          nextQuestion();
+        }
       }
       // a to toggle show answer
       if ((key === 'a' || key === 'A') && !isTypingInInput(target)) {
@@ -588,7 +697,7 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [buzzed, streamingActive, mcChoices.length, canAnswer, userAnswer, bonusState, mcTypedAnswer]);
+  }, [buzzed, streamingActive, mcChoices.length, canAnswer, userAnswer, bonusState, mcTypedAnswer, checking]);
 
   // Load visual image for current if it's a bonus and flagged as visual
   useEffect(() => {
@@ -622,6 +731,8 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
   function nextQuestion() {
     const pred = preferredType ? (q => q.question_type?.toLowerCase() === preferredType) : (() => true);
     const next = pickRandom(pool, pred);
+    // Prevent jumping while answer checking is in progress
+    if (checking) return;
     setCurrent(next);
   }
 
@@ -658,7 +769,7 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
         /* If math is the very first thing in a block, don't indent it */
         .practice-katex > .katex:first-child { margin-left: 0; }
       `}</style>
-      <div className="glass p-6">
+      <div className="glass p-6 bg-white/80 dark:bg-darkcard/70 backdrop-blur">
         <div className="text-sm text-black/60 dark:text-white/80 mb-2">
           <span className="font-semibold">{tournament_clean}</span>{' \u2022 '}
           ROUND {current.round ?? '\u2014'}
@@ -701,7 +812,7 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
           </div>
         )}
       </div>
-      <div className="glass p-6 flex flex-col justify-between" style={{ minHeight: '40vh', width: '100%' }}>
+      <div className="glass p-6 bg-white/80 dark:bg-darkcard/70 backdrop-blur flex flex-col justify-between" style={{ minHeight: '40vh', width: '100%' }}>
         <label className="block text-sm font-medium mb-2">Your answer</label>
         {/* Show radio buttons for MC, textbox for short answer only */}
         {Array.isArray(mcChoices) && mcChoices.length > 0 ? (
@@ -768,11 +879,21 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
           <button className="btn btn-ghost px-3 py-1.5 text-base" onClick={() => setShowAnswer(s => !s)} title={showAnswer ? 'Hide answer' : 'Reveal answer'}>
             {showAnswer ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
-          <button className="btn btn-ghost px-3 py-1.5 text-base" onClick={nextQuestion} title="Next question">
+          <button
+            className={`btn btn-ghost px-3 py-1.5 text-base ${checking ? 'bg-gray-200 text-gray-500 dark:bg-neutral-800 dark:text-gray-400 cursor-not-allowed' : ''}`}
+            onClick={nextQuestion}
+            disabled={checking}
+            title={checking ? 'Please wait—checking in progress' : 'Next question'}
+          >
             <SkipForward size={16} />
           </button>
         </div>
-        {result && (
+        {checking && checkingTarget === 'tossup' ? (
+          <div className="mt-4 rounded-xl px-4 py-3 border bg-blue-100 text-blue-900 border-blue-200 dark:bg-blue-900/20 dark:text-blue-100 dark:border-blue-800 flex items-center gap-3">
+            <DoubleHelix />
+            <span className="font-medium">Checking answer...</span>
+          </div>
+        ) : result && (
           <div
             className={
               `mt-4 rounded-xl px-4 py-3 border ` +
@@ -816,9 +937,9 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
               <LatexRenderer>{bonusState.bonus.question}</LatexRenderer>
             </div>
             {/* Show radio buttons for MC, textbox for short answer only */}
-            {parseMCChoices(bonusState.bonus).length > 0 ? (
+            {parseMCChoicesRG(bonusState.bonus).length > 0 ? (
               <div className="space-y-2 text-lg mb-4">
-                {parseMCChoices(bonusState.bonus).map(([k, v]) => (
+                {parseMCChoicesRG(bonusState.bonus).map(([k, v]) => (
                   <label key={k} className="flex items-baseline gap-2 cursor-pointer">
                     <input
                       type="radio"
@@ -852,6 +973,12 @@ function PracticeQuestionCard({ current, setCurrent, pool, preferredType, userAn
                 {bonusState.showAnswer ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
+            {checking && checkingTarget === 'bonus' && (
+              <div className="mt-4 rounded-xl px-4 py-3 border bg-blue-100 text-blue-900 border-blue-200 dark:bg-blue-900/20 dark:text-blue-100 dark:border-blue-800 flex items-center gap-3">
+                <DoubleHelix />
+                <span className="font-medium">Checking answer...</span>
+              </div>
+            )}
             {bonusState.result && (
               <div
                 className={

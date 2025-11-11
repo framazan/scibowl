@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'firebase/app';
-import { initializeAppCheck, ReCaptchaV3Provider, getToken as getAppCheckTokenInternal } from 'firebase/app-check';
+import { initializeAppCheck, ReCaptchaV3Provider, ReCaptchaEnterpriseProvider, getToken as getAppCheckTokenInternal } from 'firebase/app-check';
 import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
@@ -52,10 +52,16 @@ export function ensureAppCheck() {
     }
     const app = getFirebaseApp();
     if (!appCheckInstance) {
-      const siteKey = import.meta.env.VITE_RECAPTCHA_V3_SITE_KEY;
-      if (siteKey) {
+      const entKey = import.meta.env.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY;
+      const v3Key = import.meta.env.VITE_RECAPTCHA_V3_SITE_KEY;
+      if (entKey) {
         appCheckInstance = initializeAppCheck(app, {
-          provider: new ReCaptchaV3Provider(siteKey),
+          provider: new ReCaptchaEnterpriseProvider(entKey),
+          isTokenAutoRefreshEnabled: true,
+        });
+      } else if (v3Key) {
+        appCheckInstance = initializeAppCheck(app, {
+          provider: new ReCaptchaV3Provider(v3Key),
           isTokenAutoRefreshEnabled: true,
         });
       } else {

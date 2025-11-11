@@ -1,38 +1,51 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <!-- Canonical primary page for round generation -->
+  <!-- Root -->
+  <url>
+    <loc>https://sciencebowl.org/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <lastmod>2025-11-02</lastmod>
+  </url>
+  <!-- Round Generator -->
   <url>
     <loc>https://sciencebowl.org/round-generator</loc>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
-    <lastmod>2025-09-20</lastmod>
+    <lastmod>2025-11-02</lastmod>
   </url>
-  <!-- Root retained (optional) for legacy links; priority lowered -->
-  <url>
-    <loc>https://sciencebowl.org/</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.5</priority>
-    <lastmod>2025-09-20</lastmod>
-  </url>
-  <!-- Practice mode (currently early / limited) -->
+  <!-- Practice mode -->
   <url>
     <loc>https://sciencebowl.org/practice</loc>
     <changefreq>weekly</changefreq>
-    <priority>0.6</priority>
-    <lastmod>2025-09-20</lastmod>
+    <priority>0.8</priority>
+    <lastmod>2025-11-02</lastmod>
   </url>
-  <!-- Privacy Policy -->
+  <!-- Multiplayer -->
+  <url>
+    <loc>https://sciencebowl.org/multiplayer</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <lastmod>2025-11-02</lastmod>
+  </url>
+  <!-- Buzzer -->
+  <url>
+    <loc>https://sciencebowl.org/buzzer</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <lastmod>2025-11-02</lastmod>
+  </url>
+  <!-- Policies -->
   <url>
     <loc>https://sciencebowl.org/privacy-policy</loc>
     <changefreq>yearly</changefreq>
     <priority>0.2</priority>
-    <lastmod>2025-09-22</lastmod>
+    <lastmod>2025-11-02</lastmod>
   </url>
-  <!-- Terms of Service -->
   <url>
     <loc>https://sciencebowl.org/terms-of-service</loc>
     <changefreq>yearly</changefreq>
     <priority>0.2</priority>
-    <lastmod>2025-09-22</lastmod>
+    <lastmod>2025-11-02</lastmod>
   </url>
 </urlset>

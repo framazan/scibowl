@@ -4,6 +4,86 @@ import { collection, addDoc, serverTimestamp, doc, getDoc, setDoc, updateDoc, de
 // Schema: users/{uid}/rounds/{autoId}
 // round document: {
 //   createdAt, title, filters, pairs: [{tossupId, bonusId}], tournaments: [], questionType, count
+// }
+
+// Minimal IndexedDB for user rounds (separate DB to avoid version conflicts)
+const ROUNDS_DB_NAME = 'scibowl-user-cache';
+const ROUNDS_DB_VERSION = 1;
+let roundsDbPromise = null;
+const STALE_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
+
+function openRoundsDb() {
+  if (roundsDbPromise) return roundsDbPromise;
+  roundsDbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(ROUNDS_DB_NAME, ROUNDS_DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('roundsIndex')) db.createObjectStore('roundsIndex'); // key: uid -> entries object
+      if (!db.objectStoreNames.contains('roundDetails')) db.createObjectStore('roundDetails'); // key: `${uid}::${roundId}` -> detail
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return roundsDbPromise;
+}
+
+async function idbGetIndex(uid) {
+  try {
+    const db = await openRoundsDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('roundsIndex', 'readonly');
+      const store = tx.objectStore('roundsIndex');
+      const req = store.get(uid);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+async function idbSetIndex(uid, payload) {
+  try {
+    const db = await openRoundsDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('roundsIndex', 'readwrite');
+      const store = tx.objectStore('roundsIndex');
+  const req = store.put(payload, uid);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    // ignore cache failures
+  }
+}
+async function idbGetDetail(uid, roundId) {
+  try {
+    const db = await openRoundsDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('roundDetails', 'readonly');
+      const store = tx.objectStore('roundDetails');
+      const req = store.get(`${uid}::${roundId}`);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+async function idbSetDetail(uid, roundId, detail) {
+  try {
+    const db = await openRoundsDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('roundDetails', 'readwrite');
+      const store = tx.objectStore('roundDetails');
+  const req = store.put(detail, `${uid}::${roundId}`);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    // ignore cache failures
+  }
+}
+async function idbDeleteDetail(uid, roundId) {
   try {
     const db = await openRoundsDb();
     await new Promise((resolve) => {
@@ -16,6 +96,7 @@ import { collection, addDoc, serverTimestamp, doc, getDoc, setDoc, updateDoc, de
   } catch {
     // ignore cache failures
   }
+}
 async function idbListDetailIds(uid) {
   try {
     const db = await openRoundsDb();
@@ -503,3 +584,84 @@ export async function renameUserRound(uid, roundId, newTitle) {
   return true;
 }
 
+// =============================
+// Shared Preset Round Claimer
+// =============================
+// Reads a shared preset set owned by an admin user and returns a matching round's pairs.
+// Attempts to remove the claimed id from the admin's set via a transaction; this removal
+// will likely be denied by Firestore rules for non-admin users, so it's best-effort only.
+// Returns: { roundId: string|null, pairs?: any[] }
+export async function claimSharedPresetRound({
+  questionType = 'both',
+  categories = [],
+  count = 1,
+  adminUid = 'fkLJJ2R6HbdwqoXSxrLUybZ0IdH2',
+} = {}) {
+  const db = getFirestoreDb();
+  const presetsRef = doc(db, 'users', adminUid, 'meta', 'presets');
+  let currentSet = [];
+  try {
+    const snap = await getDoc(presetsRef);
+    const data = snap.exists() ? (snap.data() || {}) : {};
+    currentSet = Array.isArray(data?.set) ? [...data.set] : [];
+  } catch {
+    return { roundId: null };
+  }
+  if (!currentSet || currentSet.length === 0) return { roundId: null };
+
+  const desired = Math.max(1, Number(count) || 1);
+  const cats = Array.isArray(categories) && categories.length ? new Set(categories.map(c => String(c).toUpperCase())) : null;
+  const type = (questionType || 'both').toLowerCase();
+
+  function satisfies(pairs) {
+    if (!Array.isArray(pairs)) return 0;
+    let pool = [];
+    if (type === 'tossup') {
+      pool = pairs.filter(p => !!p?.tossupMeta && (!cats || cats.has(String(p.tossupMeta.category || '').toUpperCase())));
+    } else if (type === 'bonus') {
+      pool = pairs.filter(p => !!p?.bonusMeta && (!cats || cats.has(String(p.bonusMeta.category || '').toUpperCase())));
+    } else {
+      // both: enforce tossup category/type; bonus optional
+      pool = pairs.filter(p => !!p?.tossupMeta && (!cats || cats.has(String(p.tossupMeta.category || '').toUpperCase())));
+    }
+    return pool.length;
+  }
+
+  // Find usable round ids by scanning set and collect eligible candidates
+  const eligible = [];
+  let chosenPairs = null;
+  for (let i = 0; i < currentSet.length; i++) {
+    const rid = currentSet[i];
+    try {
+      const rsnap = await getDoc(doc(db, 'users', adminUid, 'rounds', rid));
+      if (!rsnap.exists()) continue;
+      const pairs = (rsnap.data()?.pairs) || [];
+      if (satisfies(pairs) >= desired) { eligible.push({ index: i, rid, pairs }); }
+    } catch { /* ignore and continue */ }
+  }
+
+  if (eligible.length === 0) return { roundId: null };
+  // Pick a random eligible preset
+  const pick = eligible[Math.floor(Math.random() * eligible.length)];
+  const claimedId = pick.rid;
+  chosenPairs = pick.pairs;
+
+  // Best-effort removal: attempt transaction; if rules don't allow tx.set,
+  // fall back to arrayRemove which our rules permit.
+  try {
+    await runTransaction(db, async (tx) => {
+      const s = await tx.get(presetsRef);
+      const d = s.exists() ? (s.data() || {}) : {};
+      const arr = Array.isArray(d.set) ? [...d.set] : [];
+      const idx = arr.indexOf(claimedId);
+      if (idx !== -1) {
+        arr.splice(idx, 1);
+        tx.set(presetsRef, { set: arr }, { merge: true });
+      }
+    });
+  } catch {
+    try { await updateDoc(presetsRef, { set: arrayRemove(claimedId) }); } catch {}
+  }
+
+  return { roundId: claimedId, pairs: chosenPairs };
+}

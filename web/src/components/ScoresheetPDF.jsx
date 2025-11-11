@@ -216,7 +216,7 @@ export default function ScoresheetPDF({ sheetRows = [], players = [], metadata =
             {sheetRows.slice(0,25).map(r => <DataRowB key={'B-'+r.index} r={r} seatPlayers={bSeats} outRows={outRowsB} cols={colsB} />)}
           </View>
         </View>
-        <Text style={styles.footer}>Generated {metadata.generatedAt || ''} | scibowl.app</Text>
+        <Text style={styles.footer}>Generated {metadata.generatedAt || ''} | atombowl</Text>
       </Page>
     </Document>
   );

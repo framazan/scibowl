@@ -33,8 +33,10 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.checkAnswerBonus = exports.checkAnswerMC = void 0;
+exports.updateRoomMemberCount = exports.checkAnswerBonus = exports.checkAnswerMC = exports.cleanupIdleRooms = void 0;
 const functions = __importStar(require("firebase-functions"));
+const functionsV1 = __importStar(require("firebase-functions/v1"));
+const scheduler_1 = require("firebase-functions/v2/scheduler");
 const admin = __importStar(require("firebase-admin"));
 const vertexai_1 = require("@google-cloud/vertexai");
 const fs = __importStar(require("fs"));
@@ -46,6 +48,47 @@ try {
 catch {
     admin.initializeApp();
 }
+// Scheduled cleanup: delete multiplayer rooms idle for > 3 days
+exports.cleanupIdleRooms = (0, scheduler_1.onSchedule)({ schedule: 'every 24 hours', timeZone: 'Etc/UTC' }, async (_event) => {
+    const db = admin.database();
+    const now = Date.now();
+    const maxAgeMs = 3 * 24 * 60 * 60 * 1000; // 3 days
+    const cutoff = now - maxAgeMs;
+    const roomsSnap = await db.ref('mp/rooms').once('value');
+    const rooms = roomsSnap.val() || {};
+    const toDelete = [];
+    for (const [id, v] of Object.entries(rooms)) {
+        const last = Number((v && v.lastActiveAt) || v?.createdAt || 0);
+        const status = v?.status;
+        // Only delete if closed or idle regardless of open/closed? Requirement says 'no user interaction'. We'll treat strictly by lastActiveAt
+        if (!last || last < cutoff)
+            toDelete.push(id);
+    }
+    // Delete room subtree and related indexes
+    const updates = {};
+    for (const id of toDelete) {
+        updates[`mp/rooms/${id}`] = null;
+        updates[`mp/roomMembers/${id}`] = null;
+        updates[`mp/roomMessages/${id}`] = null;
+        updates[`mp/roomSettings/${id}`] = null;
+        updates[`mp/roomAnswers/${id}`] = null;
+        updates[`mp/roomBuzzes/${id}`] = null;
+        updates[`mp/roomHistory/${id}`] = null;
+    }
+    // Also prune userRooms entries pointing to deleted rooms
+    const usersSnap = await db.ref('mp/userRooms').once('value');
+    const users = usersSnap.val() || {};
+    for (const [uid, roomsMap] of Object.entries(users)) {
+        for (const rid of Object.keys(roomsMap || {})) {
+            if (toDelete.includes(rid)) {
+                updates[`mp/userRooms/${uid}/${rid}`] = null;
+            }
+        }
+    }
+    if (Object.keys(updates).length > 0) {
+        await db.ref().update(updates);
+    }
+});
 exports.checkAnswerMC = functions.https.onRequest(async (req, res) => {
     setCorsHeaders(req, res);
     if (req.method === 'OPTIONS') {
@@ -65,14 +108,12 @@ exports.checkAnswerMC = functions.https.onRequest(async (req, res) => {
         res.status(400).json({ error: 'userAnswer and correctAnswer are required strings' });
         return;
     }
-    const log = functions.logger;
     const ua = normalize(userAnswer);
     const ca = normalize(stripAnswerParentheticals(correctAnswer));
     const ch = Array.isArray(choices) ? choices.slice(0, 4) : [];
-    log.info('checkAnswerMC:start', { hasQ: !!question, chLen: ch.length });
     // If clear exact/contains match, fast-pass
-    if (ua && ca && (ua === ca || ca.includes(ua) || ua.includes(ca))) {
-        res.json({ correct: true, score: 1.0, reason: undefined });
+    if (ua && ca && (ua === ca || ua.includes(ca))) {
+        res.json({ correct: true });
         return;
     }
     const location = process.env.GCLOUD_LOCATION || process.env.FUNCTIONS_REGION || 'us-central1';
@@ -83,7 +124,6 @@ exports.checkAnswerMC = functions.https.onRequest(async (req, res) => {
         return;
     }
     try {
-        log.info('LLM: preparing VertexAI call', { project, location });
         const vertexAI = new vertexai_1.VertexAI({ project, location });
         const model = vertexAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
         const template = loadTemplate('mc_check.tmpl', defaultMcTemplate());
@@ -93,29 +133,23 @@ exports.checkAnswerMC = functions.https.onRequest(async (req, res) => {
             .replace(/\{\{OFFICIAL_ANSWER\}\}/g, safeForTmpl(String(correctAnswer ?? '')))
             .replace(/\{\{STUDENT_ANSWER\}\}/g, safeForTmpl(String(userAnswer ?? '')))
             .replace(/\{\{CHOICES\}\}/g, choicesBlock);
-        log.info('LLM: prompt constructed', { prompt });
         const result = await model.generateContent({
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             generationConfig: { temperature: 0.2, maxOutputTokens: 2000 }
         });
-        log.info('LLM: model.generateContent result', { result });
         const text = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        log.info('LLM: raw text from model', { text });
         let parsed = null;
         try {
             parsed = JSON.parse(extractJson(text));
         }
         catch (e) {
-            log.warn('LLM: JSON.parse failed, trying safeJsonLike', { error: e, text });
             parsed = safeJsonLike(text);
         }
-        log.info('LLM: parsed result', { parsed });
         const correct = !!parsed?.correct;
         const reason = typeof parsed?.reason === 'string' ? parsed.reason : undefined;
         res.json({ correct, reason });
     }
     catch (err) {
-        log.error('LLM check failed', { error: err, userAnswer, correctAnswer, question, choices });
         const fallback = ua && ca && (ua === ca);
         res.json({ correct: fallback, reason: 'LLM check failed; used fallback' });
     }
@@ -139,12 +173,11 @@ exports.checkAnswerBonus = functions.https.onRequest(async (req, res) => {
         res.status(400).json({ error: 'userAnswer and correctAnswer are required strings' });
         return;
     }
-    const log = functions.logger;
     const ua = normalize(userAnswer);
     const ca = normalize(stripAnswerParentheticals(correctAnswer));
     // Only allow exact (case-insensitive, normalized) match to skip LLM
     if (ua && ca && ua === ca) {
-        res.json({ correct: true, score: 1.0 });
+        res.json({ correct: true });
         return;
     }
     const location = process.env.GCLOUD_LOCATION || process.env.FUNCTIONS_REGION || 'us-central1';
@@ -155,7 +188,6 @@ exports.checkAnswerBonus = functions.https.onRequest(async (req, res) => {
         return;
     }
     try {
-        log.info('LLM: preparing VertexAI call', { project, location });
         const vertexAI = new vertexai_1.VertexAI({ project, location });
         const model = vertexAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
         const template = loadTemplate('bonus_check.tmpl', defaultBonusTemplate());
@@ -163,31 +195,41 @@ exports.checkAnswerBonus = functions.https.onRequest(async (req, res) => {
             .replace(/\{\{QUESTION\}\}/g, safeForTmpl(String(question ?? '')))
             .replace(/\{\{OFFICIAL_ANSWER\}\}/g, safeForTmpl(String(correctAnswer ?? '')))
             .replace(/\{\{STUDENT_ANSWER\}\}/g, safeForTmpl(String(userAnswer ?? '')));
-        log.info('LLM: prompt constructed', { prompt });
         const result = await model.generateContent({
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             generationConfig: { temperature: 0.2, maxOutputTokens: 2000 }
         });
-        log.info('LLM: model.generateContent result', { result });
         const text = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        log.info('LLM: raw text from model', { text });
         let parsed = null;
         try {
             parsed = JSON.parse(extractJson(text));
         }
         catch (e) {
-            log.warn('LLM: JSON.parse failed, trying safeJsonLike', { error: e, text });
             parsed = safeJsonLike(text);
         }
-        log.info('LLM: parsed result', { parsed });
         const correct = !!parsed?.correct;
         const reason = typeof parsed?.reason === 'string' ? parsed.reason : undefined;
         res.json({ correct, reason });
     }
     catch (err) {
-        log.error('LLM check failed', { error: err, userAnswer, correctAnswer, question });
         const fallback = ua && ca && (ua === ca);
         res.json({ correct: fallback, reason: 'LLM check failed; used fallback' });
+    }
+});
+// Keep an accurate memberCount on mp/rooms/{roomId} regardless of RTDB read rules (1st gen trigger to avoid Eventarc perms)
+exports.updateRoomMemberCount = functionsV1.database
+    .ref('/mp/roomMembers/{roomId}/{uid}')
+    .onWrite(async (_change, context) => {
+    try {
+        const roomId = context.params.roomId;
+        const db = admin.database();
+        const snap = await db.ref(`mp/roomMembers/${roomId}`).once('value');
+        const val = snap.val() || {};
+        const count = Object.keys(val).length;
+        await db.ref(`mp/rooms/${roomId}/memberCount`).set(count);
+    }
+    catch (e) {
+        // best-effort; ignore
     }
 });
 function stripAnswerParentheticals(ans) {
@@ -306,7 +348,6 @@ async function enforceAppCheck(req, res) {
         return true;
     }
     catch (err) {
-        functions.logger.warn('App Check verification failed', { error: err });
         setCorsHeaders(req, res);
         res.status(401).json({ error: 'Invalid App Check token' });
         return false;

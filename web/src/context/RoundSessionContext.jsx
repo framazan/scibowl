@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { idbSet, idbDel } from '../data/idb.js';
+import { idbSet } from '../data/idb.js';
+import { pushCurrentMeta, readSessionRoundsMeta } from '../data/sessionRoundsCache.js';
 
 const RoundSessionContext = createContext(null);
 
@@ -28,6 +29,7 @@ export function RoundSessionProvider({ children }) {
       try {
         window.__sbGeneratedPairs = value;
         // Persist to IndexedDB
+        // Keep legacy keys for backward compatibility
         idbSet('sb_current_round', toMinimal(value));
         idbSet('sb_current_round_meta', toMeta(value));
       } catch {}
@@ -35,25 +37,23 @@ export function RoundSessionProvider({ children }) {
     });
   };
   const pushGeneratedRound = (pairs) => {
-    setHistory(prev => [...prev, pairs]); // session-only history (cleared on refresh)
+    // Append to in-memory history for this session
+    setHistory(prev => [...prev, pairs]);
     setGeneratedPairs(pairs);
+    // Update session-scoped cache (persist across refresh, reset on tab close)
+    try { pushCurrentMeta(toMeta(pairs)); } catch {}
   };
-  // On mount: clear any persisted history from prior sessions.
+  // On mount: ensure a session id exists by touching the session cache (no destructive clears).
   useEffect(() => {
     let alive = true;
     (async () => {
       if (!alive) return;
-      // Clear any previously persisted history after refresh (one-time per load)
-      try { await idbDel('sb_generated_history'); } catch {}
-      try { await idbDel('sb_generated_history_meta'); } catch {}
-      // Also clear any previously persisted current round so we ignore cache after refresh
-      try { await idbDel('sb_current_round'); } catch {}
-      try { await idbDel('sb_current_round_meta'); } catch {}
+      try { await readSessionRoundsMeta(); } catch {}
     })();
     return () => { alive = false; };
   }, []);
   return (
-    <RoundSessionContext.Provider value={{ generatedPairs: generatedPairsState, setGeneratedPairs, history, pushGeneratedRound }}>
+    <RoundSessionContext.Provider value={{ generatedPairs: generatedPairsState, setGeneratedPairs, history, setHistory, pushGeneratedRound }}>
       {children}
     </RoundSessionContext.Provider>
   );

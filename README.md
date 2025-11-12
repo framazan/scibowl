@@ -7,7 +7,7 @@ atombowl is a (work‑in‑progress) platform related to Science Bowl style cont
 ---
 
 ## Table of Contents
-1. [Features & Goals](#Features & Goals)
+1. [Features & Goals](#features)
 2. [Repository Structure](#Repository Structure)
 3. Firebase Integration
 4. Backend / Cloud Functions
@@ -19,7 +19,7 @@ atombowl is a (work‑in‑progress) platform related to Science Bowl style cont
 10. Future Enhancements
 
 ---
-
+<a name="features"/>
 ## Features & Goals
 
 Planned / existing components:

@@ -8,18 +8,19 @@ atombowl is a (work‑in‑progress) platform related to Science Bowl style cont
 
 ## Table of Contents
 1. [Features & Goals](#features)
-2. [Repository Structure](#Repository Structure)
-3. Firebase Integration
-4. Backend / Cloud Functions
-5. Python Utilities
-6. Development Setup
-7. Common Workflows
-8. Testing & Debugging
-9. Security & Sensitive Configuration
-10. Future Enhancements
+2. [Repository Structure](#repo)
+3. [Firebase Integration](#firebase)
+4. [Backend / Cloud Functions](#cloud)
+5. [Python Utilities](#python)
+6. [Development Setup](#dev)
+7. [Common Workflows](#workflows)
+8. [Testing & Debugging](#testing)
+9. [Security & Sensitive Configuration](#security)
+10. [Future Enhancements](#future)
 
 ---
 <a name="features"/>
+
 ## Features & Goals
 
 Planned / existing components:
@@ -31,6 +32,7 @@ Planned / existing components:
 - Experimentation scripts (e.g. `rate_limit_test.py` for API rate / throughput investigation).
 
 ---
+<a name="repo"/>
 
 ## Repository Structure
 
@@ -56,6 +58,7 @@ web/                       # Frontend assets (HTML/CSS/JS)
 ```
 
 ---
+<a name="firebase"/>
 
 ## 3. Firebase Integration
 
@@ -76,6 +79,7 @@ You should review and audit rule files before production deployment to ensure:
 - Avoidance of broad `allow read, write: if true;` patterns.
 
 ---
+<a name="cloud"/>
 
 ## 4. Backend / Cloud Functions (`functions/`)
 
@@ -94,6 +98,7 @@ Recommended conventions (if not already present):
 - Use environment variables or Firebase config instead of hard-coding secrets.
 
 ---
+<a name="python"/>
 
 ## 5. Python Utilities
 
@@ -107,6 +112,7 @@ Dependencies are listed in `requirements.txt`. (Exact package list was not retri
 - Benchmark endpoints (latency / throughput).
 
 ---
+<a name="dev"/>
 
 ## 6. Development Setup
 
@@ -149,6 +155,7 @@ python normalize_questions.py      # Example pipeline step
 ```
 
 ---
+<a name="workflows"/>
 
 ## 7. Common Workflows
 
@@ -167,6 +174,7 @@ python normalize_questions.py      # Example pipeline step
   - Export JSON and upload to Firestore via admin function or script.
 
 ---
+<a name="testing"/>
 
 ## 8. Testing & Debugging
 
@@ -179,6 +187,7 @@ Performance:
 - Use `rate_limit_test.py` to monitor throughput when scaling queries or ingestion.
 
 ---
+<a name="security"/>
 
 ## 9. Security & Sensitive Configuration
 
@@ -194,6 +203,7 @@ Version control hygiene:
 - Confirm `.gitignore` excludes local datasets, env files (`.env`), and large raw dumps.
 
 ---
+<a name="future"/>
 
 ## 10. Future Enhancements
 
@@ -207,6 +217,7 @@ Potential improvements:
 - Add sample dataset and import script for onboarding contributors.
 
 ---
+<a name="contributing"/>
 
 ## Contributing
 
@@ -216,18 +227,14 @@ Potential improvements:
 4. Submit PR with description (include rule changes rationale if applicable).
 
 ---
+<a name="license"/>
 
 ## License
 
 (Choose a license if not yet selected—MIT, Apache 2.0, etc.)
 
 ---
-
-## Disclaimer
-
-Some file contents (e.g., package.json scripts, requirements.txt dependencies, rule specifics) were not retrieved in the inspection snapshot. Update sections above with concrete details once reviewed.
-
----
+<a name="quickstart"/>
 
 ## Quick Start Summary
 

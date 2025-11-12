@@ -1,6 +1,6 @@
 # atombowl
 
-atombowl is a (work‑in‑progress) platform related to Science Bowl style content and tooling. The repository combines a JavaScript/TypeScript + HTML/CSS frontend (and Firebase hosting/rules) with supporting Python utilities for data acquisition, preprocessing, and experimentation (e.g. rate‑limit tests). It uses Firebase (Realtime Database, Firestore, Storage, and Cloud Functions) as the backend infrastructure. It's currently deployed at [sciencebowl.org](https://sciencebowl.org/).
+atombowl is a (work‑in‑progress) platform related to Science Bowl style content and tooling. The repository combines a JavaScript/TypeScript + HTML/CSS frontend (and Firebase hosting/rules) wit[...] 
 
 > Language composition: 78.7% JavaScript, 12.5% Python, 4.8% HTML, 2.4% CSS, 1.6% TypeScript.
 
@@ -47,8 +47,13 @@ config_sensitive/          # (Placeholder) likely holds secrets or non-committed
 data_aquisition/           # Python scripts for ingesting / cleaning question data
 database.rules.json        # Firebase Realtime Database security rules
 firebase.json              # Firebase project configuration (hosting, functions, etc.)
-firestore.rules            # Firestore security rules
-functions/                 # Firebase Cloud Functions source (Node.js / TS)
+firebase.json              # Firebase project configuration (hosting, functions, etc.)
+firebase.json              # Firebase project configuration (hosting, functions, etc.)
+firebase.json              # Firebase project configuration (hosting, functions, etc.)
+firebase.json              # Firebase project configuration (hosting, functions, etc.)
+firebase.json              # Firebase project configuration (hosting, functions, etc.)
+firebase.json              # Firebase project configuration (hosting, functions, etc.)
+firebase.json              # Firebase project configuration (hosting, functions, etc.)
 package.json               # Node project manifest (dependencies & scripts)
 package-lock.json          # Locked dependency graph for Node modules
 rate_limit_test.py         # Python script for rate limit / performance testing
@@ -231,7 +236,7 @@ Potential improvements:
 
 ## License
 
-(Choose a license if not yet selected—MIT, Apache 2.0, etc.)
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ---
 <a name="quickstart"/>

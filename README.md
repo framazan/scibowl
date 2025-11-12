@@ -1,6 +1,6 @@
-# SciBowl
+# atombowl
 
-SciBowl is a (work‑in‑progress) platform related to Science Bowl style content and tooling. The repository combines a JavaScript/TypeScript + HTML/CSS frontend (and Firebase hosting/rules) with supporting Python utilities for data acquisition, preprocessing, and experimentation (e.g. rate‑limit tests). It uses Firebase (Realtime Database, Firestore, Storage, and Cloud Functions) as the backend infrastructure.
+atombowl is a (work‑in‑progress) platform related to Science Bowl style content and tooling. The repository combines a JavaScript/TypeScript + HTML/CSS frontend (and Firebase hosting/rules) with supporting Python utilities for data acquisition, preprocessing, and experimentation (e.g. rate‑limit tests). It uses Firebase (Realtime Database, Firestore, Storage, and Cloud Functions) as the backend infrastructure. It's currently deployed at [sciencebowl.org](https://sciencebowl.org/).
 
 > Language composition: 78.7% JavaScript, 12.5% Python, 4.8% HTML, 2.4% CSS, 1.6% TypeScript.
 

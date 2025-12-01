@@ -2,9 +2,7 @@
 
 [![Deployment to Firebase Hosting](https://github.com/framazan/scibowl/actions/workflows/firebase-hosting-merge.yml/badge.svg?branch=main)](https://github.com/framazan/scibowl/actions/workflows/firebase-hosting-merge.yml)
 
-atombowl is a comprehensive platform designed to enhance preparation for Science Bowl competitions. It provides a suite of tools for acquiring, normalizing, and practicing with science quiz questions, helping students, coaches, and enthusiasts excel in physics, chemistry, biology, earth science, math, and general science challenges. Built with modern web technologies and powered by Firebase, atombowl offers fast, reliable access to curated question sets and interactive practice modes.
-
-> Language composition: 78.7% JavaScript, 12.5% Python, 4.8% HTML, 2.4% CSS, 1.6% TypeScript.
+atombowl is a comprehensive platform designed to enhance preparation for Science Bowl competitions (it's also useful for other competitions too, like USABO!). It provides a suite of tools for practicing with science quiz questions in any subject. It features the *largest ever Science Bowl question database* at over 100,000 questions. All questions were curated via a custom AI algorithm, making them render in beautiful $`\LaTeX`$.
 
 ---
 

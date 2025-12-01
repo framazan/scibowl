@@ -17,38 +17,77 @@
       {
         "source": "**/*.@(js|css)",
         "headers": [
-          { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=31536000, immutable"
+          }
         ]
       },
       {
         "source": "**/*.@(png|svg|jpg|jpeg|gif|webp)",
         "headers": [
-          { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=31536000, immutable"
+          }
         ]
       },
       {
         "source": "site.webmanifest",
         "headers": [
-          { "key": "Cache-Control", "value": "public, max-age=3600" }
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=3600"
+          }
         ]
       },
       {
         "source": "**/*.html",
         "headers": [
-          { "key": "Cache-Control", "value": "public, max-age=300, must-revalidate" }
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=300, must-revalidate"
+          }
         ]
       }
     ],
     "rewrites": [
-      { "source": "/signin", "destination": "/index.html" },
-      { "source": "/round-generator", "destination": "/index.html" },
-      { "source": "/admin", "destination": "/index.html" },
-      { "source": "/practice", "destination": "/index.html" },
-      { "source": "/buzzer", "destination": "/index.html" },
-      { "source": "/buzzer/**", "destination": "/index.html" },
-      { "source": "/multiplayer", "destination": "/index.html" },
-      { "source": "/multiplayer/**", "destination": "/index.html" },
-      { "source": "/", "destination": "/index.html" }
+      {
+        "source": "/signin",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/round-generator",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/admin",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/practice",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/buzzer",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/buzzer/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/multiplayer",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/multiplayer/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/",
+        "destination": "/index.html"
+      }
     ],
     "cleanUrls": true,
     "trailingSlash": false

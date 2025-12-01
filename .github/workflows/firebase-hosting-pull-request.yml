@@ -32,27 +32,3 @@ jobs:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SCIBOWL_ANALYTICS }}
           projectId: scibowl-analytics
-      - name: Comment preview URL on PR
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const detailsUrl = core.getInput('detailsUrl');
-            const urls = core.getInput('urls');
-            const channelId = core.getInput('channelId');
-            const parts = [];
-            if (detailsUrl) parts.push(`Preview: ${detailsUrl}`);
-            if (urls) parts.push(`URLs: ${urls}`);
-            if (channelId) parts.push(`Channel: ${channelId}`);
-            const body = parts.length ? parts.join('\n') : 'Firebase preview deployed.';
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
-            });
-          result-encoding: string
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          detailsUrl: ${{ steps.hosting_deploy.outputs.details_url }}
-          urls: ${{ steps.hosting_deploy.outputs.urls }}
-          channelId: ${{ steps.hosting_deploy.outputs.channelId }}

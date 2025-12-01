@@ -2,73 +2,41 @@
 
 [![Deployment to Firebase Hosting](https://github.com/framazan/scibowl/actions/workflows/firebase-hosting-merge.yml/badge.svg?branch=main)](https://github.com/framazan/scibowl/actions/workflows/firebase-hosting-merge.yml)
 
-atombowl is a comprehensive platform designed to enhance preparation for Science Bowl competitions (it's also useful for other competitions too, like USABO!). It provides a suite of tools for practicing with science quiz questions in any subject. It features the *largest ever Science Bowl question database* at over 100,000 questions. All questions were curated via a custom AI algorithm, making them render in beautiful $`\LaTeX`$.
+atombowl is a comprehensive platform designed to enhance preparation for Science Bowl competitions (it's also useful for other competitions too, like USABO!). It provides a suite of tools for practicing with science quiz questions in any subject. It features the **largest ever Science Bowl question database** at over 100,000 questions. All questions were curated via a custom AI algorithm, making them render in beautiful LaTeX on the website. No more wonky equations or questions with messed up formatting. Answers on all tools are checked via `gemini-2.5-flash` with sub-second latency, so no more [protobowl.com](https://protobowl.com)-esque wacky grading.
 
 ---
 
-## What is Science Bowl?
+## What is Science Bowl? (in case you don't know)
 
 Science Bowl is a fast-paced, buzzer-based quiz competition where teams compete to answer questions on various scientific topics. Questions are divided into toss-ups (answered individually) and bonuses (team-based). Competitions emphasize quick recall, critical thinking, and teamwork.
 
-atombowl bridges the gap between raw question data and effective study by normalizing content, providing structured practice sessions, and offering analytics to track progress.
+atombowl bridges the gap between raw question data and effective study by normalizing content, providing structured practice sessions in the form of a multiplayer platform and an individual practice feature. It also offfers analytics to track progress.
 
 ---
 
 ## Key Features
 
-- **Curated Question Database**: Access a growing collection of questions acquired and standardized through automated Python scripts, ensuring consistency in formatting, categories, and difficulty levels.
-- **Interactive Web Frontend**: A user-friendly interface built with JavaScript, TypeScript, HTML, and CSS, served via Firebase Hosting for seamless access on any device.
-- **Real-Time Practice Sessions**: Leverage Firebase's Realtime Database for live, interactive quizzes where users can buzz in, answer questions, and receive instant feedback.
-- **Cloud Backend**: Serverless Cloud Functions handle data processing, user authentication, scoring, and analytics without server management.
-- **Secure Storage and Rules**: Firebase Firestore and Storage manage data securely, with custom rules to protect user privacy and content integrity.
-- **AI-Assisted Preparation**: Incorporate AI features for intelligent question generation, adaptive difficulty adjustment, and personalized recommendations based on user performance (currently in development).
-- **Performance Monitoring**: Built-in tools to test and optimize latency, ensuring quick response times that mimic real competition conditions. Use Python scripts like `rate_limit_test.py` to benchmark throughput and identify bottlenecks.
-- **Data Acquisition Utilities**: Python tools for scraping, cleaning, and ingesting question data from APIs, websites, and other sources, maintaining data provenance and quality.
-
----
-
-## How atombowl Helps with Preparation
-
-atombowl empowers users to prepare effectively for Science Bowl competitions through:
-
-- **Targeted Practice**: Filter questions by subject, difficulty, and type to focus on weak areas and build speed.
-- **Analytics and Insights**: Track answer accuracy, response times, and progress over time. Identify patterns in mistakes and receive suggestions for improvement.
-- **Low-Latency Experience**: Optimized Firebase infrastructure minimizes delays, allowing for realistic simulation of competition pacing.
-- **AI-Powered Learning**: Future AI integrations will analyze user data to generate custom questions, predict strengths/weaknesses, and tailor study plans.
-- **Collaborative Tools**: Share practice sessions or compete with peers in real-time, fostering teamwork skills.
-
-Whether you're a student preparing for your first tournament or a coach refining team strategies, atombowl provides the tools to turn knowledge into competitive advantage.
-
+- **Curated Question Database**: Access a growing collection of questions acquired and standardized through automated Python scripts, ensuring consistency in formatting, categories, and difficulty levels. It includes all the major tournaments and invitationals (MIT, Berkeley, Stanford, Prometheus, 50+ more)
+- **Real-Time Multiplayer Sessions**: Firebase's Realtime Database is used for a multiplayer mode with sub-90ms latency where users can buzz in, answer questions, and their friends can see what they are typing/doing instantly. Similar to QBreader or Protobowl, just with a better answer checker, more questions, and excellent formatting.
+- **Practice Mode**: Practice indivdually, but with Gemini explaining why you got an answer wrong/correct. Also, you get a nice multiple choice web-rendered format.
+- **Round Generator**: Tired of repeat questions? Generate a round with which categories you want, from what tournaments you want.
+- **Buzzer**: Latency corrected buzzer system that let's you (as a host) read questions in-app while managing a buzzer. Way simpler than multitasking windows on Mac or Windows.
+- **Account**: Every round you generate, every buzzer you host, and all your stats all get synced to Google Cloud Platform securely under your account, if you create one.
 ---
 
 ## Getting Started
 
 ### For Users
-1. **Access the Platform**: Visit the live atombowl site hosted on Firebase (link in badge above).
-2. **Sign Up/Login**: Create an account to track your progress and customize your practice.
-3. **Start Practicing**: Choose from available question sets, start a quiz, and begin improving.
-
-No installation required—everything runs in your browser.
+1. **Access the Platform**: Visit the live atombowl site at [sciencebowl.org](https://sciencebowl.org)
+2. **Sign Up/Login**: Create an account to track your progress and customize your practice, as well as host buzzers.
+3. **Start Practicing**: Choose from available question sets, start a multiplayer game, a practice session, or generate a round, and begin improving.
 
 ### For Developers and Contributors
-If you'd like to contribute to the development of atombowl:
+If you'd like to contribute to the development of atombowl, or just make your own version:
 
 1. Fork and clone the repository.
-2. Set up your development environment (see repository for details on Node.js, Python, and Firebase).
+2. Set up your development environment (just install npm dependencies). If you want to make your own, initiate your own Firebase project.
 3. Make changes, test locally with Firebase emulators, and submit a pull request.
-
----
-
-## Contributing
-
-We welcome contributions from the community! Whether it's adding new questions, improving the UI, or enhancing AI features, your input helps make atombowl better.
-
-1. Fork the repo.
-2. Create a feature branch.
-3. Commit your changes.
-4. Open a pull request with a clear description.
-
-For detailed development setup, workflows, and testing guidelines, refer to the repository's technical documentation.
 
 ---
 
@@ -80,6 +48,4 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## Future Plans
 
-We're continuously improving atombowl. Upcoming enhancements include expanded AI capabilities, more question sources, advanced analytics, and mobile app support. Stay tuned for updates!
-
-For questions or feedback, open an issue in the repository.
+I want to continuously improve atombowl. Upcoming enhancements include expanded analytics, a team portal feature, and mobile support. Any ideas? Email Filip at [filip123@duck.com](mailto:filip123@duck.com)

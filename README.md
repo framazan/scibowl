@@ -1,4 +1,4 @@
-# atombowl
+# atombowl [![Deployment to Firebase Hosting](https://github.com/framazan/scibowl/actions/workflows/firebase-hosting-merge.yml/badge.svg?branch=main)](https://github.com/framazan/scibowl/actions/workflows/firebase-hosting-merge.yml)
 
 atombowl is a (work‑in‑progress) platform related to Science Bowl style content and tooling. The repository combines a JavaScript/TypeScript + HTML/CSS frontend (and Firebase hosting/rules) wit[...] 
 
